@@ -145,8 +145,7 @@ defmodule Macaw.Host.Config do
   @spec put!(Path.t(), [spec()], String.t(), String.t()) :: {:ok, term()} | {:error, String.t()}
   def put!(path, specs, name, text) do
     with {:ok, {key, type}} <- lookup(specs, name),
-         {:ok, value} <- parse_value(text),
-         {:ok, value} <- Types.check(type, value) do
+         {:ok, value} <- typed(type, text) do
       Literal.write!(path, Map.put(Literal.read!(path), key, value), header())
       {:ok, value}
     end
@@ -179,6 +178,15 @@ defmodule Macaw.Host.Config do
       nil -> {:error, "no setting named #{name}"}
       {key, type, _} -> {:ok, {key, type}}
     end
+  end
+
+  # An enum value is matched by its name as a string (`open` or `:open`),
+  # as from an env var, so a typo is "must be one of …", never an atom.
+  defp typed({:enum, _} = type, text),
+    do: Types.cast(type, String.trim_leading(String.trim(text), ":"))
+
+  defp typed(type, text) do
+    with {:ok, value} <- parse_value(text), do: Types.check(type, value)
   end
 
   defp parse_value(text) do

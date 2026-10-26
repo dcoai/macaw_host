@@ -18,10 +18,12 @@ defmodule Macaw.Host.MixProject do
     ]
   end
 
-  def application, do: [extra_applications: [:logger, :crypto]]
+  def application, do: [mod: {Macaw.Host.Application, []}, extra_applications: [:logger, :crypto]]
 
   defp deps do
     [
+      {:plug, "~> 1.16", optional: true},
+      {:ecto_sql, "~> 3.12", optional: true},
       {:stream_data, "~> 1.1", only: :test}
     ]
   end

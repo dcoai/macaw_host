@@ -1,0 +1,803 @@
+defmodule Ctl.Commands do
+  @moduledoc """
+  The common subcommands. Each returns `:ok`, `{:error, message}` for
+  main/1 to print, or `{:halt, status}` to end with a child's exit status.
+  The helpers marked public (`ensure_ready/1`, `ensure_running/1`,
+  `stream/1`, `interactive/1`, `exit_status/1`) are there for
+  `Ctl.AppCommands` too.
+  """
+
+  @script <%= inspect(@script) %>
+  @title <%= inspect(@title) %>
+
+  @init_usage "usage: ./#{@script} init [DIR] [--force] [--migrate]"
+
+  @doc """
+  Sets up this host's data directory: asks for it (or takes `DIR`),
+  creates it and its `data/`, writes `@data_dir` into this script, writes
+  the settings file if there is none, and seeds the app's configuration
+  (`Ctl.App.seeds/0`). `--force` points a script that already has a data
+  directory at another. `--migrate` brings an older script's settings and
+  DATA into the new directory instead of seeding.
+  """
+  def init(env, args) do
+    {flags, rest} = Enum.split_with(args, &String.starts_with?(&1, "--"))
+
+    cond do
+      flags -- ["--force", "--migrate"] != [] or length(rest) > 1 ->
+        {:error, @init_usage}
+
+      env.data_dir != nil and "--force" not in flags ->
+        {:error,
+         "this #{@script} already uses #{env.data_dir} — ./#{@script} init --force DIR to point it elsewhere"}
+
+      "--migrate" in flags and not File.exists?(Ctl.Env.legacy_path(env)) ->
+        {:error, "nothing to migrate: there is no #{Ctl.Env.legacy_path(env)}"}
+
+      true ->
+        dir = rest |> List.first() |> init_dir() |> Path.expand()
+
+        with :ok <- make_home(dir),
+             {:ok, env} <- Ctl.Env.with_data_dir(env, dir, env.sys_values),
+             :ok <- write_script_home(env.script, dir),
+             :ok <- write_conf(env, "--migrate" in flags),
+             # Re-read: the settings just written are what the rest uses.
+             {:ok, env} <- Ctl.Env.with_data_dir(env, dir, env.sys_values) do
+          IO.puts("#{env.script} now uses #{dir}")
+
+          if "--migrate" in flags,
+            do: migrate(env),
+            else: seed_config(env)
+        end
+    end
+  end
+
+  defp init_dir(nil) do
+    question = "Where should this host keep #{@title}'s data? [#{Ctl.App.default_home()}] "
+
+    case Ctl.World.prompt(question) do
+      "" -> Ctl.App.default_home()
+      answer -> answer
+    end
+  end
+
+  defp init_dir(dir), do: dir
+
+  # The directory is the host user's; data/ inside it is handed to the
+  # container user on start. Creating it may need root, which is the one
+  # thing this script will not do on its own.
+  defp make_home(dir) do
+    case File.mkdir_p(Path.join(dir, "data")) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error,
+         """
+         cannot create #{dir}: #{:file.format_error(reason)}
+
+         Create it for yourself, then run init again:
+
+             sudo install -d -o "$USER" #{dir}\
+         """}
+    end
+  end
+
+  defp write_script_home(script, dir) do
+    with {:ok, text} <- read(script),
+         :ok <- write(script, Ctl.Script.put_data_dir(text, dir), 0o755),
+         do: :ok
+  end
+
+  # An existing settings file is someone's settings and is kept; a
+  # migration starts it from the old script's host settings.
+  defp write_conf(env, migrate?) do
+    cond do
+      env.loaded? ->
+        IO.puts("keeping #{env.path}")
+        :ok
+
+      migrate? ->
+        with {:ok, known, _extra} <- Ctl.Env.read_file(Ctl.Env.legacy_path(env)) do
+          IO.puts("writing #{env.path} from #{Ctl.Env.legacy_path(env)}")
+          write(env.path, Ctl.Env.render(Map.merge(env.values, known)), 0o600)
+        end
+
+      true ->
+        IO.puts("writing #{env.path}")
+        write(env.path, Ctl.Env.render(env.values), 0o600)
+    end
+  end
+
+  # The seeds are this host's (its name, its zone); anything already set in
+  # the app's configuration is left alone.
+  defp seed_config(env) do
+    with :ok <- seed(env, Ctl.App.seeds()) do
+      IO.puts("ready: ./#{@script} start")
+    end
+  end
+
+  # `Enum.empty?/1` rather than a clause for `[]`: the compiler knows the
+  # seeds, and would warn about a clause that can never match.
+  defp seed(env, seeds) do
+    if Enum.empty?(seeds), do: :ok, else: seed_each(env, seeds)
+  end
+
+  defp seed_each(env, seeds) do
+    with :ok <- ensure_ready(env),
+         {:ok, objects} <- release_config(env, ["list"]) do
+      defaults = for %{"name" => key, "source" => "default"} <- objects, do: key
+
+      Enum.reduce_while(seeds, :ok, fn {key, value}, :ok ->
+        key = to_string(key)
+
+        if key in defaults,
+          do: halt_on_failure(config_set(env, key, Ctl.Env.resolve_value(value))),
+          else: {:cont, :ok}
+      end)
+    end
+  end
+
+  # A value as the literal the app's config reads: a string quoted, a
+  # number or an atom as written.
+  defp config_set(env, key, value) do
+    with {:ok, objects} <- release_config(env, ["set", key, inspect(value)]) do
+      print_config(objects)
+    end
+  end
+
+  defp halt_on_failure(:ok), do: {:cont, :ok}
+  defp halt_on_failure(failure), do: {:halt, failure}
+
+  # The old layout: settings in `<app>-env` beside the script, data wherever
+  # DATA said (a path or a named volume). With the container stopped, the
+  # data is copied into data/ (the old copy is left for you to remove) and
+  # the settings the app itself uses become its configuration.
+  defp migrate(env) do
+    legacy = Ctl.Env.legacy_path(env)
+
+    with {:ok, _known, extra} <- Ctl.Env.read_file(legacy),
+         old = Map.new(extra),
+         old_data = Map.get(old, "DATA", Ctl.App.default_home()),
+         :ok <- outside_old_data(env, old_data),
+         :ok <- ensure_available_image(env),
+         :ok <- stop(env, []),
+         :ok <- empty_data(env),
+         :ok <- copy_old_data(env, old_data, old["SECRET_KEY_BASE"]),
+         :ok <- migrate_config(env, old),
+         :ok <- rename(legacy, legacy <> ".migrated") do
+      IO.puts("""
+      moved #{legacy} to #{legacy}.migrated
+      migrated — check ./#{@script} config list, then ./#{@script} start.
+      The old data at #{old_data} was copied, not moved: remove it once #{@title} runs.\
+      """)
+    end
+  end
+
+  # Copying the old data into a directory inside it would copy it into
+  # itself; a named volume (no slash) cannot contain anything on the host.
+  defp outside_old_data(env, old_data) do
+    old = Path.expand(old_data)
+
+    if String.contains?(old_data, "/") and
+         (env.data_dir == old or String.starts_with?(env.data_dir, old <> "/")) do
+      {:error, "#{env.data_dir} is inside the old data at #{old} — migrate into a directory outside it"}
+    else
+      :ok
+    end
+  end
+
+  defp empty_data(env) do
+    case File.ls(Ctl.Env.data_path(env)) do
+      {:ok, []} -> :ok
+      _ -> {:error, "#{Ctl.Env.data_path(env)} is not empty — migrate into a fresh data directory"}
+    end
+  end
+
+  defp copy_old_data(env, old_data, secret_key_base) do
+    IO.puts("copying #{old_data} into #{Ctl.Env.data_path(env)}")
+    {argv, opts} = Ctl.Docker.migrate_args(env, old_data, secret_key_base)
+
+    case Ctl.Docker.run(argv, opts ++ [stderr_to_stdout: true]) do
+      {_, 0} -> :ok
+      {out, _} -> {:error, "could not copy #{old_data}: #{String.trim(out)}"}
+    end
+  end
+
+  # What the older script ran the app with: its file's value, else the
+  # default it used, so nothing changes under the migration.
+  defp migrate_config(env, old) do
+    Enum.reduce_while(Ctl.App.migrate_keys(), :ok, fn {old_key, key, default}, :ok ->
+      case Ctl.Env.present(old[old_key]) || Ctl.Env.resolve_value(default) do
+        nil -> {:cont, :ok}
+        value -> halt_on_failure(config_set(env, key, value))
+      end
+    end)
+  end
+
+  defp rename(from, to) do
+    case File.rename(from, to) do
+      :ok -> :ok
+      {:error, reason} -> {:error, "cannot move #{from}: #{:file.format_error(reason)}"}
+    end
+  end
+
+  @env_usage "usage: ./#{@script} env list | get KEY | set KEY=VALUE [KEY=VALUE…] | unset KEY   (--reveal shows secrets)"
+
+  @doc """
+  The host settings, edited in place: `list` every key with where its value
+  came from, `get` one, `set` one or more, `unset` one. A key this script
+  does not know is accepted (the file is free-form) and flagged in `list`,
+  so a typo is visible rather than silently ignored. The app's own
+  settings are refused with a pointer to `config`. Secrets are masked
+  unless `--reveal`.
+  """
+  def env(env, args) do
+    {reveal?, args} = Ctl.Secret.reveal(args)
+
+    with :ok <- require_home(env) do
+      case args do
+        ["list"] -> env_list(env, reveal?)
+        ["get", key] -> env_get(env, key, reveal?)
+        ["set" | pairs] when pairs != [] -> env_set(env, pairs)
+        ["unset", key] -> env_unset(env, key)
+        _ -> {:error, @env_usage}
+      end
+    end
+  end
+
+  defp env_list(env, reveal?) do
+    for key <- Ctl.Env.keys() do
+      value = Ctl.Secret.display(key, Ctl.Env.get(env, key), reveal?)
+      print_setting(key, value, Atom.to_string(Ctl.Env.source(env, key)))
+    end
+
+    for {key, value} <- env.extra do
+      print_setting(key, Ctl.Secret.display(key, value, reveal?), "file, unknown to #{@script}")
+    end
+
+    :ok
+  end
+
+  defp print_setting(key, value, source) do
+    IO.puts(String.pad_trailing(key <> "=" <> value, 40) <> " (" <> source <> ")")
+  end
+
+  defp env_get(env, key, reveal?) do
+    cond do
+      key in Ctl.Env.keys() -> IO.puts(Ctl.Secret.display(key, Ctl.Env.get(env, key), reveal?))
+      value = List.keyfind(env.extra, key, 0) -> IO.puts(Ctl.Secret.display(key, elem(value, 1), reveal?))
+      true -> {:error, "#{key} is not set in #{env.path}"}
+    end
+  end
+
+  defp env_set(env, pairs) do
+    with {:ok, pairs} <- env_pairs(pairs),
+         known = Map.new(for {key, value} <- pairs, key in Ctl.Env.keys(), do: {key, value}),
+         :ok <- Ctl.Env.validate(%{env | values: Map.merge(env.values, known)}),
+         {:ok, text} <- env_text(env) do
+      edited = Enum.reduce(pairs, text, fn {key, value}, acc -> Ctl.Env.edit_set(acc, key, value) end)
+
+      with :ok <- write(env.path, edited, 0o600) do
+        for {key, _} <- pairs do
+          unknown = if key in Ctl.Env.keys(), do: "", else: " (not a setting #{@script} knows)"
+          IO.puts("set #{key}#{unknown}")
+        end
+
+        restart_to_apply(env.path)
+      end
+    end
+  end
+
+  defp env_pairs(pairs) do
+    Enum.reduce_while(pairs, {:ok, []}, fn pair, {:ok, acc} ->
+      case String.split(pair, "=", parts: 2) do
+        [key, value] ->
+          cond do
+            app_key = Ctl.Env.app_keys()[String.upcase(key)] ->
+              {:halt,
+               {:error, "#{key} is #{@title}'s own configuration now: ./#{@script} config set #{app_key} VALUE"}}
+
+            Ctl.Env.valid_key?(key) ->
+              {:cont, {:ok, acc ++ [{key, value}]}}
+
+            true ->
+              {:halt, {:error, "#{key} is not a valid setting name (letters, digits and _)"}}
+          end
+
+        _ ->
+          {:halt, {:error, "expected KEY=VALUE, got #{pair}\n" <> @env_usage}}
+      end
+    end)
+  end
+
+  defp env_unset(env, key) do
+    with {:ok, text} <- env_text(env) do
+      case Ctl.Env.edit_unset(text, key) do
+        {_, 0} ->
+          IO.puts("#{key} is not set in #{env.path}; nothing to do")
+
+        {edited, _} ->
+          with :ok <- write(env.path, edited, 0o600) do
+            IO.puts("unset #{key}")
+            restart_to_apply(env.path)
+          end
+      end
+    end
+  end
+
+  # A file that is not there yet starts as `init` would write it, so an
+  # edit leaves the settings documented rather than a one-line file.
+  defp env_text(env) do
+    case File.read(env.path) do
+      {:ok, text} -> {:ok, text}
+      {:error, :enoent} -> {:ok, Ctl.Env.render(env.values, env.extra)}
+      {:error, reason} -> {:error, "cannot read #{env.path}: #{:file.format_error(reason)}"}
+    end
+  end
+
+  @config_usage "usage: ./#{@script} config list | get KEY | set KEY VALUE | unset KEY"
+
+  @doc """
+  The app's own configuration, kept on the data volume (`config.exs`) and
+  changed by the app itself: `<Release>.config()` in a throwaway container
+  of the image, so it works whether or not the app is running. The words
+  travel as JSON in `<PREFIX>_CTL_ARGS`, by name, never on a command line;
+  the answer is one JSON object per line. The app masks its secrets itself,
+  and never shows them.
+  """
+  def config(env, args) do
+    with :ok <- require_home(env) do
+      case args do
+        ["list"] -> config_call(env, args)
+        ["get", _key] -> config_call(env, args)
+        ["set", _key, _value] -> config_call(env, args)
+        ["unset", _key] -> config_call(env, args)
+        _ -> {:error, @config_usage}
+      end
+    end
+  end
+
+  defp config_call(env, args) do
+    with :ok <- ensure_ready(env),
+         {:ok, objects} <- release_config(env, args),
+         :ok <- print_config(objects) do
+      if hd(args) in ["set", "unset"],
+        do: IO.puts("#{@title}'s configuration updated — ./#{@script} restart to apply"),
+        else: :ok
+    end
+  end
+
+  defp print_config(objects) do
+    Enum.each(objects, fn
+      %{"name" => name, "value" => value, "source" => source} ->
+        IO.puts(String.pad_trailing("#{name}=#{value}", 40) <> " (#{source})")
+
+      %{"set" => name} ->
+        IO.puts("set #{name}")
+
+      %{"unset" => name} ->
+        IO.puts("unset #{name}")
+
+      other ->
+        IO.puts(JSON.encode!(other))
+    end)
+  end
+
+  # The release's answer, one JSON object per line. Its failure is a line
+  # on stderr, which reaches the terminal as it is, and a status passed on.
+  defp release_config(env, args) do
+    {argv, opts} = Ctl.Docker.config_args(env, args)
+
+    case Ctl.Docker.run(argv, opts) do
+      {out, 0} -> decode_lines(out)
+      {_, status} -> {:halt, status}
+    end
+  end
+
+  @doc "Output of the release protocol, one JSON object per line: `{:ok, objects}`."
+  def decode_lines(out) do
+    out
+    |> String.split("\n", trim: true)
+    |> Enum.reduce_while({:ok, []}, fn line, {:ok, acc} ->
+      case JSON.decode(line) do
+        {:ok, %{} = object} -> {:cont, {:ok, acc ++ [object]}}
+        _ -> {:halt, {:error, "#{Ctl.App.release()} answered with a line that is not a JSON object: #{line}"}}
+      end
+    end)
+  end
+
+  @doc """
+  What a throwaway container of the image needs: valid settings, docker,
+  the image, and a data volume the container user owns.
+  """
+  def ensure_ready(env) do
+    with :ok <- ensure_available_image(env), do: prepare_data(env)
+  end
+
+  defp ensure_available_image(env) do
+    with :ok <- Ctl.Env.validate(env),
+         :ok <- Ctl.Docker.ensure_available(),
+         do: ensure_image(env)
+  end
+
+  @doc """
+  Runs the container from the settings: pulls the image if it is missing,
+  makes the data volume the container user's, and recreates the container
+  so every changed setting takes effect. Nothing of value lives in the
+  container; it is all in the data directory.
+  """
+  def start(env, _args) do
+    name = Ctl.Env.get(env, "NAME")
+
+    with :ok <- require_home(env),
+         :ok <- ensure_ready(env),
+         :ok <- remove_existing(name),
+         :ok <- run_container(env, name) do
+      Ctl.World.sleep(2000)
+
+      if Ctl.Docker.container_running?(name) do
+        IO.puts("#{name} is running — ./#{@script} status shows #{@title}'s health once it is up")
+      else
+        IO.puts("the container exited immediately. Its last words:")
+        IO.write(Ctl.Docker.last_words(name))
+        {:error, "#{name} did not stay up"}
+      end
+    end
+  end
+
+  defp ensure_image(env) do
+    ref = Ctl.Env.ref(env)
+
+    if Ctl.Docker.have_image?(ref) do
+      :ok
+    else
+      IO.puts("#{ref} is not present locally")
+      Ctl.Docker.pull(ref, Ctl.Env.get(env, "IMAGE"))
+    end
+  end
+
+  # The container runs as a fixed user; a throwaway container of the same
+  # image (root inside it, which is what docker access amounts to anyway)
+  # hands data/ over, so no sudo is needed on the host.
+  defp prepare_data(env) do
+    data = Ctl.Env.data_path(env)
+    {uid, gid} = Ctl.App.ids()
+
+    cond do
+      match?({:ok, %File.Stat{uid: ^uid}}, File.stat(data)) ->
+        :ok
+
+      File.mkdir_p(data) != :ok ->
+        {:error, "cannot create #{data} — is #{env.data_dir} yours? (sudo install -d -o \"$USER\" #{env.data_dir})"}
+
+      true ->
+        IO.puts("making #{data} the container user's (#{uid}:#{gid})")
+
+        case Ctl.Docker.run(Ctl.Docker.own_data_args(env), stderr_to_stdout: true) do
+          {_, 0} ->
+            :ok
+
+          {out, _} ->
+            {:error,
+             """
+             could not hand #{data} to the container user: #{String.trim(out)}
+
+             Do it by hand, then try again:
+
+                 sudo chown #{uid}:#{gid} #{data}\
+             """}
+        end
+    end
+  end
+
+  defp remove_existing(name) do
+    if Ctl.Docker.container_exists?(name) do
+      IO.puts("removing the existing #{name}")
+      Ctl.Docker.remove_container(name)
+    else
+      :ok
+    end
+  end
+
+  defp run_container(env, name) do
+    IO.puts("starting #{name} from #{Ctl.Env.ref(env)}")
+
+    case Ctl.Docker.run(Ctl.Docker.run_args(env), stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {out, _} -> {:error, "docker run failed: #{String.trim(out)}"}
+    end
+  end
+
+  @doc "Stops and removes the container, with a grace period. The data is untouched."
+  def stop(env, _args) do
+    name = Ctl.Env.get(env, "NAME")
+
+    with :ok <- Ctl.Docker.ensure_available() do
+      if Ctl.Docker.container_exists?(name) do
+        IO.puts("stopping and removing #{name} (its data is untouched)")
+        Ctl.Docker.run(Ctl.Docker.stop_args(name), stderr_to_stdout: true)
+        Ctl.Docker.remove_container(name)
+      else
+        IO.puts("#{name} is not there")
+      end
+    end
+  end
+
+  def restart(env, args) do
+    with :ok <- require_home(env),
+         :ok <- stop(env, args),
+         do: start(env, args)
+  end
+
+  @doc """
+  Pulls TAG again. A new image replaces this script with the one it
+  carries (keeping this one's `@data_dir` line), and that script, which
+  knows how to run the new image, recreates the container if there is one.
+  An unchanged image still offers its script, in case this copy has
+  drifted from it.
+  """
+  def update(env, _args) do
+    ref = Ctl.Env.ref(env)
+    name = Ctl.Env.get(env, "NAME")
+
+    with :ok <- require_home(env),
+         :ok <- Ctl.Docker.ensure_available(),
+         before = Ctl.Docker.image_id(ref),
+         :ok <- Ctl.Docker.pull(ref, Ctl.Env.get(env, "IMAGE")) do
+      cond do
+        before == Ctl.Docker.image_id(ref) ->
+          IO.puts("already on the newest #{ref}")
+          sync_self(env, nil)
+
+        not Ctl.Docker.container_exists?(name) ->
+          IO.puts("pulled a new #{ref}; #{name} is not there — ./#{@script} start")
+          sync_self(env, nil)
+
+        true ->
+          with :ok <- sync_self(env, "restart") do
+            IO.puts("new image; recreating #{name}")
+            restart(env, [])
+          end
+      end
+    end
+  end
+
+  # Compared by content, after carrying the `@data_dir` line over, which
+  # also catches a local copy that has drifted from the image it manages.
+  # Overwriting the file is safe: this program is already compiled in
+  # memory. `next` is the command the replacement runs once in place; this
+  # process then ends with its exit status.
+  defp sync_self(%{self_updated?: true}, _next), do: :ok
+
+  defp sync_self(env, next) do
+    ref = Ctl.Env.ref(env)
+
+    with "#!/usr/bin/env elixir\n" <> _ = fresh <- Ctl.Docker.extract_ctl(ref),
+         {:ok, current} <- read(env.script) do
+      case Ctl.Script.splice(fresh, current) do
+        {:ok, ^current} ->
+          :ok
+
+        {:ok, spliced} ->
+          IO.puts("#{@script} in #{ref} differs from this one; updating it")
+          write_self(env.script, spliced, ref, next)
+
+        {:error, message} ->
+          IO.puts("not replacing #{@script} with the one in #{ref}: #{message}")
+          :ok
+      end
+    else
+      # An image from before the script shipped has no bin/ctl; anything
+      # that is not this kind of script is never written over a working one.
+      _ -> :ok
+    end
+  end
+
+  defp write_self(self, fresh, ref, next) do
+    with {:ok, _} <- File.copy(self, self <> ".bak"),
+         :ok <- File.write(self, fresh),
+         :ok <- File.chmod(self, 0o755) do
+      IO.puts("the previous version is #{self}.bak")
+      hand_off(self, next)
+    else
+      {:error, _} ->
+        IO.puts("#{ref} carries a newer #{@script}, but #{self} is not writable — leaving it")
+        hand_off(nil, next)
+    end
+  end
+
+  defp hand_off(_self, nil), do: :ok
+  # Not replaced: this version carries on with the command itself.
+  defp hand_off(nil, _next), do: :ok
+
+  defp hand_off(self, next) do
+    {_, status} =
+      Ctl.World.cmd(self, [next],
+        into: IO.stream(),
+        env: [{Ctl.App.prefix() <> "_CTL_SELF_UPDATED", "1"}]
+      )
+
+    {:halt, status}
+  end
+
+  @doc """
+  What is running: the container and its image, where the settings and
+  data are, and, when it is up, the app's own report (`<Release>.status()`:
+  its health, version and build).
+  """
+  def status(env, _args) do
+    name = Ctl.Env.get(env, "NAME")
+    ref = Ctl.Env.ref(env)
+
+    with :ok <- require_home(env),
+         :ok <- Ctl.Docker.ensure_available() do
+      record = Ctl.Docker.inspect_container(name)
+      IO.puts("state:    " <> state_of(record))
+      print_container(record)
+
+      IO.puts(
+        "wanted:   #{ref} " <> if(Ctl.Docker.have_image?(ref), do: "(present locally)", else: "(not pulled)")
+      )
+
+      IO.puts("home:     #{env.data_dir}")
+      IO.puts("settings: #{env.path}" <> if(env.loaded?, do: "", else: " (none yet — defaults)"))
+      IO.puts("data:     #{Ctl.Env.data_path(env)}")
+
+      if state_of(record) == "running", do: print_app(name)
+
+      :ok
+    end
+  end
+
+  defp state_of({:ok, %{"State" => %{"Running" => true}}}), do: "running"
+  defp state_of({:ok, %{"State" => %{"Status" => status}}}), do: status
+  defp state_of({:ok, _}), do: "stopped"
+  defp state_of(:none), do: "not created"
+
+  defp print_container(:none), do: :ok
+
+  defp print_container({:ok, record}) do
+    IO.puts("image:    #{get_in(record, ["Config", "Image"])}")
+    IO.puts("started:  #{get_in(record, ["State", "StartedAt"])}")
+  end
+
+  # The report is the last JSON object the rpc prints; anything before it
+  # (a warning from the node) is not the answer.
+  defp print_app(name) do
+    with {out, 0} <- Ctl.Docker.run(Ctl.Docker.status_args(name), stderr_to_stdout: true),
+         %{} = report <- last_object(out) do
+      print_report(report)
+    else
+      _ -> IO.puts("app:      not answering yet")
+    end
+  end
+
+  defp last_object(out) do
+    out
+    |> String.split("\n", trim: true)
+    |> Enum.reverse()
+    |> Enum.find_value(fn line ->
+      case JSON.decode(line) do
+        {:ok, %{} = object} -> object
+        _ -> nil
+      end
+    end)
+  end
+
+  defp print_report(report) do
+    {healthy, rest} = Map.pop(report, "healthy")
+
+    unless is_nil(healthy),
+      do: IO.puts("health:   " <> if(healthy, do: "healthy", else: "UNHEALTHY"))
+
+    for {key, value} <- Enum.sort(rest) do
+      case value do
+        %{} = nested ->
+          IO.puts("#{key}:")
+          for {sub, v} <- Enum.sort(nested), do: IO.puts("  #{String.pad_trailing(sub <> ":", 16)}#{scalar(v)}")
+
+        _ ->
+          IO.puts(String.pad_trailing(key <> ":", 10) <> scalar(value))
+      end
+    end
+
+    :ok
+  end
+
+  defp scalar(value) when is_binary(value), do: value
+  defp scalar(value), do: JSON.encode!(value)
+
+  @logs_usage "usage: ./#{@script} logs [-n N]"
+
+  @doc "Follows the log, or prints the last N lines with `-n N`."
+  def logs(env, args) do
+    name = Ctl.Env.get(env, "NAME")
+
+    with :ok <- require_home(env),
+         :ok <- Ctl.Docker.ensure_available(),
+         {:ok, tail} <- logs_tail(args),
+         :ok <- exists(name) do
+      name |> Ctl.Docker.logs_args(tail) |> stream()
+    end
+  end
+
+  defp logs_tail([]), do: {:ok, nil}
+  defp logs_tail(["-n", n]), do: tail_count(n)
+  defp logs_tail([n]), do: tail_count(n)
+  defp logs_tail(_), do: {:error, @logs_usage}
+
+  defp tail_count(n) do
+    case Integer.parse(n) do
+      {count, ""} when count > 0 -> {:ok, n}
+      _ -> {:error, @logs_usage}
+    end
+  end
+
+  @doc "A shell inside the running container."
+  def shell(env, _args) do
+    with :ok <- ensure_running(env) do
+      env |> Ctl.Env.get("NAME") |> Ctl.Docker.exec_args(["/bin/sh"], true) |> interactive()
+    end
+  end
+
+  @doc """
+  Every command but init needs the data directory; an older setup is told
+  how to bring its settings and data along.
+  """
+  def require_home(%{data_dir: nil} = env) do
+    if File.exists?(Ctl.Env.legacy_path(env)),
+      do: {:error, "this #{@script} keeps its settings in a data directory now: ./#{@script} init --migrate [DIR]"},
+      else: {:error, "no data directory yet — ./#{@script} init [DIR]"}
+  end
+
+  def require_home(_env), do: :ok
+
+  @doc "`:ok` when docker answers and the container is running, else why not."
+  def ensure_running(env) do
+    name = Ctl.Env.get(env, "NAME")
+
+    with :ok <- require_home(env),
+         :ok <- Ctl.Docker.ensure_available() do
+      if Ctl.Docker.container_running?(name),
+        do: :ok,
+        else: {:error, "#{name} is not running — ./#{@script} start"}
+    end
+  end
+
+  defp exists(name) do
+    if Ctl.Docker.container_exists?(name), do: :ok, else: {:error, "#{name} is not there — start it first"}
+  end
+
+  @doc "Runs a docker argv with its output streamed to the terminal; its exit status passes on."
+  def stream(argv), do: argv |> Ctl.Docker.run(into: IO.stream(), stderr_to_stdout: true) |> exit_status()
+
+  @doc "Runs a docker argv attached to the terminal, for an interactive command."
+  def interactive(argv), do: argv |> Ctl.Docker.run(tty: true) |> exit_status()
+
+  @doc "`:ok` for a zero exit status, `{:halt, status}` to pass any other on."
+  def exit_status({_, 0}), do: :ok
+  def exit_status({_, status}), do: {:halt, status}
+
+  defp read(path) do
+    case File.read(path) do
+      {:ok, text} -> {:ok, text}
+      {:error, reason} -> {:error, "cannot read #{path}: #{:file.format_error(reason)}"}
+    end
+  end
+
+  defp write(path, text, mode) do
+    with :ok <- File.write(path, text),
+         :ok <- File.chmod(path, mode) do
+      :ok
+    else
+      {:error, reason} -> {:error, "cannot write #{path}: #{:file.format_error(reason)}"}
+    end
+  end
+
+  # The container reads its settings only at start, so every edit ends by
+  # saying so, and never restarts on its own.
+  defp restart_to_apply(path) do
+    IO.puts("#{path} updated — ./#{@script} restart to apply")
+  end
+end

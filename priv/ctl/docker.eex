@@ -1,0 +1,224 @@
+defmodule Ctl.Docker do
+  @moduledoc """
+  Every docker command line this script runs. `run/2` is the only call
+  site, so a test that swaps `Ctl.World` sees the exact argv of each.
+  Values that may be secret never appear in an argv: they are named with
+  `-e KEY`, and their values travel in docker's own environment (the
+  `env:` option the `*_args` functions return beside the argv).
+  """
+
+  # Docker's own LimitNOFILE=infinity reaches the container as an open-file
+  # limit of about a billion, and the BEAM sizes its port table from that,
+  # reserving gigabytes at boot for ports it never opens.
+  @ulimit ["--ulimit", "nofile=65536:65536"]
+
+  def run(args, opts \\ []), do: Ctl.World.cmd("docker", args, opts)
+
+  @doc "docker is on PATH and the daemon answers."
+  def ensure_available do
+    case run(["info"], stderr_to_stdout: true) do
+      {_, 0} ->
+        :ok
+
+      {_, 127} ->
+        {:error, "docker is not installed or not on PATH"}
+
+      _ ->
+        {:error,
+         "cannot talk to the docker daemon — is it running, and are you in the docker group?"}
+    end
+  end
+
+  def have_image?(ref), do: match?({_, 0}, run(["image", "inspect", ref], stderr_to_stdout: true))
+
+  @doc "The image id, or nil when it is not present locally."
+  def image_id(ref) do
+    case run(["image", "inspect", "-f", "{{.Id}}", ref], stderr_to_stdout: true) do
+      {out, 0} -> String.trim(out)
+      _ -> nil
+    end
+  end
+
+  @doc "The container's inspect record as a map, or `:none`."
+  def inspect_container(name) do
+    with {out, 0} <- run(["container", "inspect", name], stderr_to_stdout: true),
+         {:ok, [record | _]} <- JSON.decode(out) do
+      {:ok, record}
+    else
+      _ -> :none
+    end
+  end
+
+  def container_exists?(name), do: inspect_container(name) != :none
+
+  def container_running?(name) do
+    match?({:ok, %{"State" => %{"Running" => true}}}, inspect_container(name))
+  end
+
+  @doc "Pulls an image; the failure hint names the registry login."
+  def pull(ref, image) do
+    IO.puts("pulling #{ref}")
+
+    case run(["pull", ref], into: IO.stream(), stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      _ -> {:error, "could not pull #{ref} — is 'docker login #{registry(image)}' done on this host?"}
+    end
+  end
+
+  defp registry(image), do: image |> String.split("/") |> hd()
+
+  def remove_container(name) do
+    case run(["rm", "-f", name], stderr_to_stdout: true) do
+      {_, 0} -> :ok
+      {out, _} -> {:error, "could not remove #{name}: #{String.trim(out)}"}
+    end
+  end
+
+  @doc """
+  The `docker run` argv for the settings: what `start` runs. On host
+  networking the app listens on PORT directly; on any other network it
+  listens on its own port and PORT is published to it. Then the data
+  volume, the app's own arguments (`Ctl.AppCommands.run_args/1`, when it
+  defines one), DOCKER_RUN_ARGS, and the image.
+  """
+  def run_args(env) do
+    port = Ctl.Env.get(env, "PORT")
+
+    network =
+      if Ctl.Env.host_network?(env) do
+        ["--network", "host", "-e", "PORT=#{port}"]
+      else
+        ["--network", Ctl.Env.get(env, "NETWORK"), "-p", "#{port}:#{Ctl.App.container_port()}"]
+      end
+
+    ["run", "-d", "--name", Ctl.Env.get(env, "NAME")] ++
+      @ulimit ++
+      network ++
+      ["-v", volume(env)] ++
+      app_run_args(env) ++
+      String.split(Ctl.Env.get(env, "DOCKER_RUN_ARGS")) ++
+      [Ctl.Env.ref(env)]
+  end
+
+  defp app_run_args(env) do
+    if function_exported?(Ctl.AppCommands, :run_args, 1),
+      do: Ctl.AppCommands.run_args(env),
+      else: []
+  end
+
+  defp volume(env), do: "#{Ctl.Env.data_path(env)}:#{Ctl.App.container_data()}"
+
+  defp user do
+    {uid, gid} = Ctl.App.ids()
+    "#{uid}:#{gid}"
+  end
+
+  @doc """
+  The script an image carries (`bin/ctl` prints it), or nil. Its stderr is
+  left alone so nothing but the script lands in the result.
+  """
+  def extract_ctl(ref) do
+    case run(["run", "--rm", ref, "bin/ctl"]) do
+      {out, 0} -> out
+      _ -> nil
+    end
+  end
+
+  @doc """
+  A throwaway container of the image, as root, that gives the data volume's
+  directory to the container user.
+  """
+  def own_data_args(env) do
+    ["run", "--rm", "--user", "0:0", "--entrypoint", "chown"] ++
+      ["-v", volume(env), Ctl.Env.ref(env)] ++
+      [user(), Ctl.App.container_data()]
+  end
+
+  @doc """
+  `bin/<app> eval EXPRESSION` in a throwaway container of the image, as the
+  container user with the data volume mounted, so it works whether or not
+  the app is running. `vars` are `{name, value}`: each name is on the
+  command line as `-e NAME`, its value only in docker's environment (the
+  returned options); a nil value is left out.
+  """
+  def eval_args(env, expression, vars) do
+    vars = Enum.reject(vars, fn {_, value} -> is_nil(value) end)
+
+    argv =
+      ["run", "--rm", "--user", user(), "-v", volume(env)] ++
+        Enum.flat_map(vars, fn {name, _} -> ["-e", name] end) ++
+        [Ctl.Env.ref(env), Ctl.App.release_bin(), "eval", expression]
+
+    {argv, [env: vars]}
+  end
+
+  @doc """
+  A function of the app's release module (`Macaw.Host.Release`'s protocol)
+  in a throwaway container: `args` as a JSON array in `<PREFIX>_CTL_ARGS`,
+  a password in `<PREFIX>_CTL_PASSWORD`, both by name only.
+  """
+  def release_args(env, function, args, password \\ nil) do
+    eval_args(env, "#{Ctl.App.release()}.#{function}()", [
+      {Ctl.App.prefix() <> "_CTL_ARGS", JSON.encode!(args)},
+      {Ctl.App.prefix() <> "_CTL_PASSWORD", password}
+    ])
+  end
+
+  @doc "The app's own configuration command, `<Release>.config()`."
+  def config_args(env, args), do: release_args(env, "config", args)
+
+  @doc """
+  Copies an older script's DATA (a host path or a named volume) into the
+  data volume, hands it to the container user, and keeps the session key
+  older setups held in their settings, so nobody is signed out.
+  """
+  def migrate_args(env, old_data, secret_key_base) do
+    data = Ctl.App.container_data()
+
+    script = """
+    cp -a /old/. #{data}/ && \
+    if [ -n "$SECRET_KEY_BASE" ] && [ ! -e #{data}/secret_key_base ]; then \
+      printf %s "$SECRET_KEY_BASE" > #{data}/secret_key_base && chmod 600 #{data}/secret_key_base; \
+    fi && \
+    chown -R #{user()} #{data}
+    """
+
+    secret = if secret_key_base in [nil, ""], do: [], else: [{"SECRET_KEY_BASE", secret_key_base}]
+
+    argv =
+      ["run", "--rm", "--user", "0:0", "--entrypoint", "sh"] ++
+        ["-v", "#{old_data}:/old:ro", "-v", volume(env)] ++
+        Enum.flat_map(secret, fn {name, _} -> ["-e", name] end) ++
+        [Ctl.Env.ref(env), "-c", String.trim(script)]
+
+    {argv, [env: secret]}
+  end
+
+  @doc "Stops the container, giving the app time to shut down cleanly."
+  def stop_args(name), do: ["stop", "-t", Ctl.App.stop_timeout(), name]
+
+  @doc "The container's last log lines, for a start that did not stay up."
+  def last_words(name) do
+    {out, _} = run(["logs", "--tail", "30", name], stderr_to_stdout: true)
+    out
+  end
+
+  @doc """
+  `bin/<app> rpc EXPRESSION` in the running container. The expression runs
+  in the app's own node, which does not see this command's environment:
+  pass nothing secret this way.
+  """
+  def rpc_args(name, expression),
+    do: exec_args(name, [Ctl.App.release_bin(), "rpc", expression], false)
+
+  @doc "Asks the running app for its report (`<Release>.status()`): one JSON object."
+  def status_args(name), do: rpc_args(name, "#{Ctl.App.release()}.status()")
+
+  def logs_args(name, nil), do: ["logs", "-f", "--tail", "100", name]
+  def logs_args(name, tail), do: ["logs", "--tail", tail, name]
+
+  @doc "A command run inside the running container; `tty?` for an interactive one."
+  def exec_args(name, command, tty?) do
+    ["exec"] ++ if(tty?, do: ["-it"], else: []) ++ [name | command]
+  end
+end

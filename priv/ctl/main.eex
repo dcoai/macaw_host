@@ -1,0 +1,161 @@
+defmodule Ctl do
+  @moduledoc "Entry point: settings, dispatch, and the one place errors are printed."
+
+  @script <%= inspect(@script) %>
+  @title <%= inspect(@title) %>
+
+  @commands ~w(init env config start stop restart update status logs shell)
+
+  @doc """
+  Runs a command line and returns its exit status, which the last line of
+  this file halts with. A failure is an `{:error, message}` from the
+  command, printed here to stderr as status 1; `{:halt, status}` passes a
+  child's exit status through.
+  """
+  def main(argv, sys_env \\ System.get_env(), script \\ script_path()) do
+    case dispatch(argv, sys_env, script) do
+      :ok ->
+        0
+
+      {:halt, status} ->
+        status
+
+      {:error, message} ->
+        IO.puts(:stderr, message)
+        1
+    end
+  end
+
+  @doc """
+  Runs one command line against the settings `script` and `sys_env` name:
+  `:ok`, `{:error, message}` or `{:halt, status}`. The common commands come
+  first, so an app command can never shadow one; any other name listed by
+  `Ctl.AppCommands.commands/0` goes to `Ctl.AppCommands.run/3`.
+  """
+  def dispatch(argv, sys_env, script) do
+    with {:ok, env} <- Ctl.Env.load(script, sys_env) do
+      case argv do
+        [] -> usage(env)
+        [help] when help in ["help", "-h", "--help"] -> usage(env)
+        [command | args] when command in @commands -> run(command, env, args)
+        [command | args] -> app(command, env, args)
+      end
+    end
+  end
+
+  defp run("init", env, args), do: Ctl.Commands.init(env, args)
+  defp run("env", env, args), do: Ctl.Commands.env(env, args)
+  defp run("config", env, args), do: Ctl.Commands.config(env, args)
+  defp run("start", env, args), do: Ctl.Commands.start(env, args)
+  defp run("stop", env, args), do: Ctl.Commands.stop(env, args)
+  defp run("restart", env, args), do: Ctl.Commands.restart(env, args)
+  defp run("update", env, args), do: Ctl.Commands.update(env, args)
+  defp run("status", env, args), do: Ctl.Commands.status(env, args)
+  defp run("logs", env, args), do: Ctl.Commands.logs(env, args)
+  defp run("shell", env, args), do: Ctl.Commands.shell(env, args)
+
+  # The app's own commands need the data directory like the rest.
+  defp app(command, env, args) do
+    cond do
+      command not in app_commands() -> {:error, "unknown command: #{command}\n\n" <> usage_text(env)}
+      env.data_dir == nil -> Ctl.Commands.require_home(env)
+      true -> Ctl.AppCommands.run(command, env, args)
+    end
+  end
+
+  defp app_commands, do: for({name, _usage, _help} <- Ctl.AppCommands.commands(), do: name)
+
+  # Where this script lives, so `init` and `update` can rewrite it.
+  # `__ENV__.file` is the path the file was loaded from, expanded.
+  def script_path, do: Path.expand(__ENV__.file)
+
+  defp usage(env), do: IO.puts(usage_text(env))
+
+  def usage_text(env) do
+    home =
+      case env.data_dir do
+        nil -> "not set yet — ./#{@script} init [DIR]"
+        dir -> "#{dir}  (settings #{env.path}, data #{Ctl.Env.data_path(env)})"
+      end
+
+    settings =
+      Enum.map_join(Ctl.Env.keys() -- ["DOCKER_RUN_ARGS"], "\n", fn key ->
+        "  " <> String.pad_trailing(key, 18) <> Ctl.Secret.display(key, Ctl.Env.get(env, key))
+      end)
+
+    """
+    #{@script} — manage the #{@title} container on a deployment host.
+
+    #{line("init [DIR]", "set up this host's data directory (asks for one without DIR); --force points it elsewhere; --migrate brings an older setup")}
+    #{line("start", "pull if needed, then run (recreates the container)")}
+    #{line("stop", "stop and remove the container (the data is untouched)")}
+    #{line("restart", "stop, then start: applies changed settings")}
+    #{line("update", "pull a newer image, replace this script if it carries a new one, and recreate the container")}
+    #{line("status", "container, image, data, and #{@title}'s own health")}
+    #{line("logs [-n N]", "follow the log; -n N for the last N lines")}
+    #{line("shell", "a shell inside the running container")}
+    #{line("env list | get KEY | set KEY=VALUE… | unset KEY", "host settings: image, port, network (#{Ctl.App.name()}.conf); --reveal shows secrets")}
+    #{line("config list | get KEY | set KEY VALUE | unset KEY", "#{@title}'s own settings (data/config.exs)")}
+    #{app_usage()}
+    The data directory is the only thing this host keeps; its path is the one
+    line of this script that is yours, and `update` carries it over. Any host
+    setting can also be given as an environment variable for a one-off.
+
+    Data directory: #{home}
+
+    Host settings (environment variables, then #{Ctl.App.name()}.conf, then defaults):
+
+    #{settings}
+    """
+  end
+
+  # Compared as text: the compiler knows what `commands/0` returns, and
+  # would warn about a clause for the other case.
+  defp app_usage do
+    lines =
+      Enum.map_join(Ctl.AppCommands.commands(), "", fn {_name, usage, help} ->
+        line(usage, help) <> "\n"
+      end)
+
+    if lines == "", do: "", else: "\n#{@title}'s own commands:\n\n" <> lines
+  end
+
+  # One command's line: `./x-ctl USAGE` and its help, wrapped at 78 columns
+  # in a column of their own, or below a usage too long to share a line.
+  defp line(usage, help) do
+    command = "  ./#{@script} #{usage}"
+    indent = String.duplicate(" ", 30)
+    help_lines = wrap(help, 78 - 30)
+
+    if String.length(command) < 29 do
+      [first | rest] = help_lines
+
+      Enum.join(
+        [String.pad_trailing(command, 30) <> first | Enum.map(rest, &(indent <> &1))],
+        "\n"
+      )
+    else
+      Enum.join([command | Enum.map(help_lines, &(indent <> &1))], "\n")
+    end
+  end
+
+  defp wrap(text, width) do
+    text
+    |> String.split(" ", trim: true)
+    |> Enum.reduce([], fn
+      word, [] -> [word]
+      word, [current | done] ->
+        if String.length(current) + 1 + String.length(word) <= width,
+          do: [current <> " " <> word | done],
+          else: [word, current | done]
+    end)
+    |> case do
+      [] -> [""]
+      lines -> Enum.reverse(lines)
+    end
+  end
+end
+
+# Run only as a program. A test loads this file for its modules with
+# `Process.put(:ctl_no_main, true)` first, and drives `Ctl.dispatch/3`.
+unless Process.get(:ctl_no_main), do: System.halt(Ctl.main(System.argv()))

@@ -1,0 +1,179 @@
+defmodule Ctl.World do
+  @moduledoc """
+  Everything that reaches outside the script goes through here: running a
+  command, sleeping, and asking the person at the terminal. The real module
+  is the default; a test puts a replacement under `:ctl_world` in its
+  process dictionary and receives every call instead.
+  """
+
+  def impl, do: Process.get(:ctl_world, Ctl.World.Real)
+
+  @doc """
+  Runs `exe` with `args`, returning `{output, exit_status}` like
+  `System.cmd/3`. An executable that is not on PATH is `{"", 127}` — the
+  shell's answer, and one the callers already handle — rather than a raise.
+  `tty: true` attaches the command to the terminal for interactive use.
+  """
+  def cmd(exe, args, opts \\ []), do: impl().cmd(exe, args, opts)
+
+  def sleep(ms), do: impl().sleep(ms)
+
+  @doc "Asks a question on the terminal; the answer, trimmed, or \"\"."
+  def prompt(question), do: impl().prompt(question)
+
+  @doc "Asks for a password on the terminal without echoing it; the answer, or \"\"."
+  def prompt_secret(question), do: impl().prompt_secret(question)
+end
+
+defmodule Ctl.World.Real do
+  @moduledoc false
+
+  def cmd(exe, args, opts) do
+    {tty?, opts} = Keyword.pop(opts, :tty, false)
+
+    case System.find_executable(exe) do
+      nil ->
+        {"", 127}
+
+      path when tty? ->
+        # A port has pipes for stdin and stdout, which is what `docker exec
+        # -it` refuses; the terminal itself is handed over instead.
+        System.cmd("sh", ["-c", ~s(exec "$0" "$@" </dev/tty >/dev/tty 2>&1), path | args], opts)
+
+      path ->
+        System.cmd(path, args, opts)
+    end
+  end
+
+  def sleep(ms), do: Process.sleep(ms)
+
+  def prompt(question) do
+    case IO.gets(question) do
+      text when is_binary(text) -> String.trim(text)
+      _ -> ""
+    end
+  end
+
+  def prompt_secret(question) do
+    IO.write(question)
+
+    answer =
+      case :io.get_password() do
+        text when is_list(text) -> text |> List.to_string() |> String.trim_trailing("\n")
+        _ -> ""
+      end
+
+    IO.write("\n")
+    answer
+  end
+end
+
+defmodule Ctl.Script do
+  @moduledoc """
+  The one line of this script that belongs to the host: `@data_dir`, in
+  `Ctl.Home` near the top. The file on disk is the truth — it is what
+  `init` rewrites and what `update` carries into the fresh script — so it
+  is read from the file rather than from the compiled module.
+
+  The line is looked for inside `defmodule Ctl.Home` only: scripts from
+  before it existed had an unrelated `@data_dir "/data"` elsewhere, and
+  mistaking that for the host's line would let `update` write an older
+  script over a newer one.
+  """
+
+  @home ~r/^defmodule Ctl\.Home do\n.*?^end$/ms
+  @line ~r/^  @data_dir (nil|".*")$/m
+
+  @doc "The data directory the script's text names: `{:ok, nil | path}`."
+  def data_dir(text) do
+    with {:ok, {_before, home, _after}} <- home(text),
+         [_, literal] <- Regex.run(@line, home) do
+      case Code.string_to_quoted(literal) do
+        {:ok, value} when is_nil(value) or is_binary(value) -> {:ok, value}
+        _ -> {:error, "the @data_dir line is not nil or a string: #{literal}"}
+      end
+    else
+      _ -> {:error, "this script has no @data_dir line in Ctl.Home"}
+    end
+  end
+
+  @doc "The script's text naming `dir` as its data directory; only `Ctl.Home` changes."
+  def put_data_dir(text, dir) do
+    {:ok, {before, home, rest}} = home(text)
+    line = "  @data_dir " <> inspect(dir)
+    before <> Regex.replace(@line, home, fn _ -> line end, global: false) <> rest
+  end
+
+  @doc """
+  `fresh` with `current`'s `@data_dir` line in place of its own — what
+  `update` writes. Refused when either lacks the line: a script that cannot
+  carry it must not replace one that holds it.
+  """
+  def splice(fresh, current) do
+    with {:ok, _} <- data_dir(fresh),
+         {:ok, dir} <- data_dir(current) do
+      {:ok, put_data_dir(fresh, dir)}
+    end
+  end
+
+  # The text before `Ctl.Home`, the module itself, and the text after it.
+  defp home(text) do
+    case Regex.run(@home, text, return: :index) do
+      [{start, length}] ->
+        {:ok,
+         {binary_part(text, 0, start), binary_part(text, start, length),
+          binary_part(text, start + length, byte_size(text) - start - length)}}
+
+      nil ->
+        :error
+    end
+  end
+end
+
+defmodule Ctl.Secret do
+  @moduledoc """
+  Which values are secrets, and how one is shown. A secret is printed as
+  `set (…last four)` — enough to tell two keys apart, not enough to use —
+  unless the command was given `--reveal`. `set` never echoes a value at all.
+  A database URL keeps everything but its password, which is what someone
+  checking the setting needs to see.
+  """
+
+  @reveal "--reveal"
+
+  @doc """
+  `SECRET_KEY_BASE`, and any key ending in `_KEY`, `_SECRET`, `_TOKEN` or
+  `_PASSWORD`, in either case.
+  """
+  def secret?(key) do
+    down = String.downcase(key)
+
+    down == "secret_key_base" or
+      String.ends_with?(down, ["_key", "_secret", "_token", "_password"])
+  end
+
+  @doc "The value as it may be printed for `key`."
+  def display(key, value, reveal? \\ false)
+  def display(_key, value, true), do: value
+
+  def display(key, value, false) do
+    cond do
+      String.downcase(key) == "database_url" -> mask_url(value)
+      secret?(key) -> mask(value)
+      true -> value
+    end
+  end
+
+  @doc "`set (…abcd)` for a value long enough that four characters give nothing away."
+  def mask(""), do: ""
+  def mask(value) when byte_size(value) > 8, do: "set (…#{String.slice(value, -4..-1//1)})"
+  def mask(_value), do: "set"
+
+  @doc "A URL with the password in its userinfo replaced by `****`."
+  def mask_url(value) do
+    Regex.replace(~r{^([a-z][a-z0-9+.-]*://[^:/@]*):[^@/]*@}i, value, "\\1:****@")
+  end
+
+  @doc "Splits `--reveal` out of a command's arguments."
+  def reveal(args), do: {@reveal in args, List.delete(args, @reveal)}
+end

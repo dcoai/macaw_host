@@ -10,5 +10,7 @@ Host glue for deployable Phoenix apps, implemented once for the Macaw family's h
 | `Macaw.Host.Release` | the ctl's `eval`/`rpc` entry points: arguments as JSON in `<PREFIX>_CTL_ARGS`, one JSON object per output line; `migrate`, `config list/get/set/unset`, `status` |
 | `Macaw.Host.Health` | named checks in one report shape; `Macaw.Host.Health.Plug` serves it, `200` or `503` |
 | `Macaw.Host.Build` | `use Macaw.Host.Build, otp_app: :my_app`: the build's SHA and version, fixed when the app compiles |
+| `Macaw.Host.Ctl` | generates the app's `<app>-ctl` from the generic modules in `priv/ctl/`, the `:ctl` description in its `mix.exs` (`Macaw.Host.Ctl.Description`) and its own `Ctl.AppCommands`; `mix macaw.host.ctl` writes it, `--check` fails CI when the committed script differs |
+| `Macaw.Host.Ctl.Recorder` | the stand-in for a generated script's `Ctl.World`, so an app's tests assert every command's exact docker argv without docker |
 
 Part of [Macaw](https://gitlab.conet.yarina.org/dco-tek/macaw_compose) (spec/00 §4, host libraries). Released by git tag.

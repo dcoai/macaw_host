@@ -46,16 +46,4 @@ Everything a host holds for an app lives in one data directory:
 - **Test only:** `stream_data`.
 - **The application** starts one process, a `Task.Supervisor` named `Macaw.Host.Health.Tasks`, under which health checks run ([04 §2](04-health.md#host-health-isolation)).
 
-`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-packaging)). It is released by git tag (v0.1.0).
-
-## 4. Known gaps {#host-gaps}
-
-Found while writing this spec from the code (v0.1.0); each section states what the code does, and these are open for the owner's decision:
-- **Two maskings disagree.** `Macaw.Host.Config.mask/2` shows a secret's last four characters once it is longer than four bytes, so a five-byte secret shows four of its five ([01 §5](01-config.md#host-config-show)); the script's `Ctl.Secret.mask/1` shows them only past eight bytes ([07 §4](07-ctl-script.md#host-script-secret)).
-- **A broken `config.exs` breaks the protocol.** `Macaw.Host.Release.config/3` reads the file with `Macaw.Host.Config.Literal.read!/1`, so a file with faults raises (a stack trace, not one stderr line) ([03 §3](03-release.md#host-release-config)).
-- **`config list` shows an env value raw.** A setting set by env var is listed as the env var's string, masked or inspected, not cast to its type nor checked ([03 §3](03-release.md#host-release-config)); and a file key written as a string (`"port" => 1`), which `Macaw.Host.Config.resolve/4` accepts, is listed at its default.
-- **A health check's `{:error, detail}` must carry a string.** Any other detail raises in the report itself, which the report otherwise never does ([04 §1](04-health.md#host-health-checks)). Checks run one after another, so the 5 s bound is per check, not per report.
-- **The build SHA is fixed when the build module compiles,** and nothing marks the module stale when the commit changes, so an incremental build after a new commit can keep the old SHA ([05 §1](05-build.md#host-build-sha)).
-- **`env unset` does not check its key.** The key is matched as a regular expression, so `env unset '.*'` removes every active line ([08 §3](08-ctl-commands.md#host-cmd-env)).
-- **The app commands file may hold top-level code.** The check refuses modules other than `Ctl.AppCommands` and its submodules, but not a top-level expression, which would run whenever the script loads ([06 §4](06-ctl-generator.md#host-gen-app-commands)).
-- **`init --migrate` is not atomic.** It writes `@data_dir` and the settings file before it stops the container and copies the data; a failure after that leaves the script pointing at the new directory, so a retry needs `init --force --migrate` ([08 §2.2](08-ctl-commands.md#host-cmd-migrate)).
+`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-packaging)). It is released by git tag (v0.1.1: the fixes of macaw_compose#70, each with a test of its failing path).

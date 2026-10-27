@@ -175,6 +175,38 @@ defmodule Macaw.Host.CtlTest do
       assert {:error, "Ctl.AppCommands must not set @data_dir" <> _} = Ctl.app_commands(source)
     end
 
+    test "may hold nothing outside the one Ctl.AppCommands module, naming the line" do
+      source = File.read!(Path.expand("../../fixtures/ctl/app_commands_stray.ex", __DIR__))
+
+      assert {:error, message} = Ctl.app_commands(source)
+
+      assert message ==
+               "the app commands file may hold only the Ctl.AppCommands module; " <>
+                 "line 10 is outside it: alias Ctl.AppCommands"
+
+      assert {:error,
+              "the app commands file may hold only the Ctl.AppCommands module; " <>
+                "line 1 is outside it: :ok"} =
+               Ctl.app_commands(":ok\n" <> CtlFixture.app_commands())
+
+      # A submodule belongs inside the module, not beside it.
+      assert {:error,
+              "the app commands file may hold only the Ctl.AppCommands module; " <>
+                "line 48 is outside it: defmodule Ctl.AppCommands.Helpers" <> _} =
+               Ctl.app_commands(
+                 CtlFixture.app_commands() <> "\ndefmodule Ctl.AppCommands.Helpers do\nend\n"
+               )
+
+      nested =
+        String.replace(
+          CtlFixture.app_commands(),
+          "  def commands do",
+          "  defmodule Helpers do\n    def x, do: 1\n  end\n\n  def commands do"
+        )
+
+      assert {:ok, _} = Ctl.app_commands(nested)
+    end
+
     test "must parse" do
       assert {:error, "Ctl.AppCommands does not parse: line 1" <> _} =
                Ctl.app_commands("defmodule Ctl.AppCommands do\n")

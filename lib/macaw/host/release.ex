@@ -62,20 +62,34 @@ defmodule Macaw.Host.Release do
     end
   end
 
-  @doc "The config commands, pure apart from the file: `{:ok, objects}` or `{:error, message}`."
-  @spec config_command(Path.t(), [Config.spec()], String.t(), [String.t()]) ::
-          {:ok, [map()]} | {:error, String.t()}
-  def config_command(path, specs, prefix, argv) do
-    file = Config.Literal.read!(path)
+  @doc """
+  The config commands, pure apart from the file and `env` (the environment,
+  `System.get_env/0` by default): `{:ok, objects}` or `{:error, message}`.
+  A file with faults is the error, every fault on one line.
 
+  `list` and `get` show each setting as the app would load it, through
+  `Macaw.Host.Config.resolve_setting/4`, the path `Macaw.Host.Config.load!/3`
+  takes: `%{name, value, source}`, the value typed and then shown
+  (`Macaw.Host.Config.mask/2`), or, when it doesn't fit its type, the value
+  as found with the load's `fault`.
+  """
+  @spec config_command(Path.t(), [Config.spec()], String.t(), [String.t()], map()) ::
+          {:ok, [map()]} | {:error, String.t()}
+  def config_command(path, specs, prefix, argv, env \\ System.get_env()) do
+    with {:ok, file} <- Config.read_file(path) do
+      command(path, specs, prefix, argv, env, file)
+    end
+  end
+
+  defp command(path, specs, prefix, argv, env, file) do
     case argv do
       ["list"] ->
-        {:ok, for({name, type, default} <- specs, do: show(name, type, default, file, prefix))}
+        {:ok, for(spec <- specs, do: show(spec, env, file, prefix))}
 
       ["get", name] ->
         case Enum.find(specs, fn {key, _, _} -> Atom.to_string(key) == name end) do
           nil -> {:error, "no setting named #{name}"}
-          {key, type, default} -> {:ok, [show(key, type, default, file, prefix)]}
+          spec -> {:ok, [show(spec, env, file, prefix)]}
         end
 
       ["set", name, value] ->
@@ -127,16 +141,22 @@ defmodule Macaw.Host.Release do
     System.halt(1)
   end
 
-  defp show(name, type, default, file, prefix) do
-    var = Config.env_var(prefix, name)
+  defp show({name, type, _} = spec, env, file, prefix) do
+    case Config.resolve_setting(spec, env, file, prefix) do
+      {:ok, %{value: value, source: source}} ->
+        %{name: name, value: Config.mask(type, value), source: source_text(source, name, prefix)}
 
-    {value, source} =
-      cond do
-        System.get_env(var) -> {System.get_env(var), "env #{var}"}
-        Map.has_key?(file, name) -> {file[name], "config.exs"}
-        true -> {default, "default"}
-      end
-
-    %{name: name, value: Config.mask(type, value), source: source}
+      {:error, %{raw: raw, source: source, fault: fault}} ->
+        %{
+          name: name,
+          value: Config.mask(type, raw),
+          source: source_text(source, name, prefix),
+          fault: fault
+        }
+    end
   end
+
+  defp source_text(:env, name, prefix), do: "env " <> Config.env_var(prefix, name)
+  defp source_text(:file, _name, _prefix), do: "config.exs"
+  defp source_text(:default, _name, _prefix), do: "default"
 end

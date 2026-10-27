@@ -142,7 +142,7 @@ the generated script carries the description: Ctl.App.prefix/0 "SAMPLE", ids/0 {
 
 ## 4. The Ctl.AppCommands contract {#host-gen-app-commands}
 
-The app's file defines one module, `Ctl.AppCommands` (submodules of it are allowed), with:
+The app's file holds one module, `Ctl.AppCommands`, **and nothing beside it:** a module of its own is nested inside it (`defmodule Helpers` within `Ctl.AppCommands`), and code outside it, which would run every time the script loads, is refused. The module has:
 - **`commands/0`:** `[{name, usage, help}]`, the app's commands. `name` is what is typed (`"asterisk"`), `usage` how `help` shows it (`"asterisk [CLI COMMAND]"`), `help` one sentence. They are listed in `help` under the app's own heading.
 - **`run(name, env, args)`:** runs one, returning what the common commands do: `:ok`, `{:error, message}` (printed on stderr, exit 1) or `{:halt, status}`. **It is called only once the data directory is set** ([07 §8](07-ctl-script.md#host-script-main)).
 - **optionally `run_args(env)`:** extra `docker run` arguments (more ports, say), placed before DOCKER_RUN_ARGS ([07 §6](07-ctl-script.md#host-script-docker)).
@@ -153,7 +153,8 @@ It builds its docker command lines with `Ctl.Docker` (`exec_args/3`, `rpc_args/2
 
 `Macaw.Host.Ctl.app_commands/1` checks the file's source, so it can neither replace a generic module nor carry a second `@data_dir`:
 - it must parse (`"Ctl.AppCommands does not parse: line N: …"`);
-- its top-level modules must be `Ctl.AppCommands` and its submodules only (`"the app commands file may define only Ctl.AppCommands, not Ctl.Home"`), and `Ctl.AppCommands` must be among them (`"the app commands file must define Ctl.AppCommands"`);
+- its top-level modules must be `Ctl.AppCommands` or named under it (`"the app commands file may define only Ctl.AppCommands, not Ctl.Home"`), and `Ctl.AppCommands` must be among them (`"the app commands file must define Ctl.AppCommands"`);
+- **its one top-level expression is `defmodule Ctl.AppCommands`:** any other (a call, an `alias`, a literal, a submodule defined beside the module rather than inside it, a second `Ctl.AppCommands`) is refused naming the first such and its line, `"the app commands file may hold only the Ctl.AppCommands module; line N is outside it: <its first line>"` (macaw_compose#70);
 - it must define `commands/0` and `run/3` (`"Ctl.AppCommands must define run/3"`);
 - it must not set `@data_dir` on any line (`"Ctl.AppCommands must not set @data_dir: the script's one line of host state is in Ctl.Home"`).
 
@@ -161,6 +162,10 @@ It builds its docker command lines with `Ctl.Docker` (`exec_args/3`, `rpc_args/2
 
 ```test:gen-app-commands-shape
 only Ctl.AppCommands.Helpers gives "must define Ctl.AppCommands"; "defmodule Other" gives "may define only Ctl.AppCommands, not Other"; a module with commands/0 and no run/3 gives "must define run/3"
+```
+
+```test:gen-app-commands-stray
+a fixture with Ctl.AppCommands and then `alias Ctl.AppCommands` and a File.rm_rf! call is refused naming line 10, "alias Ctl.AppCommands"; a bare :ok on line 1 and a Ctl.AppCommands.Helpers defined beside the module are refused likewise; a Helpers module nested inside it is accepted
 ```
 
 ```test:gen-app-commands-guard

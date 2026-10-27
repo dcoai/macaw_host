@@ -22,8 +22,10 @@ defmodule Macaw.Host.Ctl do
 
   ## The `Ctl.AppCommands` contract
 
-  The app's file defines one module, `Ctl.AppCommands` (submodules of it
-  are allowed), with:
+  The app's file holds one module, `Ctl.AppCommands`, and nothing beside
+  it: a module of its own goes inside it (`Ctl.AppCommands.Helpers`), and
+  code outside it, which would run every time the script loads, is
+  refused. The module has:
 
   - `commands/0`: `[{name, usage, help}]`, the app's commands. `name` is
     what is typed (`"asterisk"`), `usage` how `help` shows it
@@ -113,10 +115,11 @@ defmodule Macaw.Host.Ctl do
   defp describe(description), do: Description.new(description)
 
   @doc """
-  Checks the source of an app's commands: it parses, defines
-  `Ctl.AppCommands` with `commands/0` and `run/3`, and no module outside
-  it, so it can neither replace a generic module nor carry a second
-  `@data_dir`. nil is the module of no commands.
+  Checks the source of an app's commands: it parses, holds nothing but the
+  one `Ctl.AppCommands` module (no other module, no code outside it,
+  which would run whenever the script loads), and defines `commands/0`
+  and `run/3`, so it can neither replace a generic module nor carry a
+  second `@data_dir`. nil is the module of no commands.
   """
   @spec app_commands(String.t() | nil) :: {:ok, String.t()} | {:error, String.t()}
   def app_commands(nil), do: {:ok, @no_app_commands}
@@ -124,6 +127,7 @@ defmodule Macaw.Host.Ctl do
   def app_commands(source) when is_binary(source) do
     with {:ok, ast} <- parse(source),
          :ok <- only_app_modules(ast),
+         :ok <- nothing_beside(source),
          :ok <- defines(ast, :commands, 0),
          :ok <- defines(ast, :run, 3),
          :ok <- no_data_dir(source) do
@@ -166,6 +170,37 @@ defmodule Macaw.Host.Ctl do
 
   defp top_level({:__block__, _, exprs}), do: exprs
   defp top_level(expr), do: [expr]
+
+  # The file's one top-level expression is `defmodule Ctl.AppCommands`.
+  # Parsed again with every literal wrapped, so a bare literal at the top
+  # level has a line too.
+  defp nothing_beside(source) do
+    {:ok, ast} =
+      Code.string_to_quoted(source, literal_encoder: &{:ok, {:__block__, &2, [&1]}})
+
+    stray =
+      ast
+      |> top_level()
+      |> Enum.reject(&match?({:defmodule, _, [{:__aliases__, _, [:Ctl, :AppCommands]}, _]}, &1))
+
+    case {stray, length(top_level(ast))} do
+      {[], 1} ->
+        :ok
+
+      {[], _} ->
+        {:error, "the app commands file may hold only one Ctl.AppCommands module"}
+
+      {[first | _], _} ->
+        {:error,
+         "the app commands file may hold only the Ctl.AppCommands module; " <>
+           "line #{line_of(first)} is outside it: #{first_line(first)}"}
+    end
+  end
+
+  defp line_of({_, meta, _}) when is_list(meta), do: Keyword.get(meta, :line, "?")
+  defp line_of(_), do: "?"
+
+  defp first_line(ast), do: ast |> Macro.to_string() |> String.split("\n") |> hd()
 
   defp defines(ast, name, arity) do
     {_, found?} =

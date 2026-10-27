@@ -45,39 +45,53 @@ defmodule Macaw.Host.Config do
 
     unknown =
       for {key, _} <- file,
-          not Map.has_key?(names, to_string(key)),
+          not Map.has_key?(names, key_name(key)),
           do: "config.exs: unknown setting #{inspect(key)}"
 
-    file = Map.new(file, fn {k, v} -> {to_string(k), v} end)
-
     {resolved, faults} =
-      Enum.reduce(specs, {%{}, []}, fn {name, type, default}, {acc, faults} ->
-        var = env_var(prefix, name)
-
-        result =
-          cond do
-            Map.has_key?(env, var) ->
-              {Types.cast(type, env[var]), :env, var}
-
-            Map.has_key?(file, Atom.to_string(name)) ->
-              {Types.check(type, file[Atom.to_string(name)]), :file, "config.exs #{name}"}
-
-            true ->
-              {{:ok, default}, :default, nil}
-          end
-
-        case result do
-          {{:ok, value}, source, _} ->
-            {Map.put(acc, name, %{value: value, source: source}), faults}
-
-          {{:error, why}, _, where} ->
-            {acc, ["#{where}: #{why}" | faults]}
+      Enum.reduce(specs, {%{}, []}, fn {name, _, _} = spec, {acc, faults} ->
+        case resolve_setting(spec, env, file, prefix) do
+          {:ok, entry} -> {Map.put(acc, name, entry), faults}
+          {:error, fault} -> {acc, [fault.fault | faults]}
         end
       end)
 
     case unknown ++ Enum.reverse(faults) do
       [] -> {:ok, resolved}
       all -> {:error, all}
+    end
+  end
+
+  @doc """
+  Resolves one setting as `resolve/4` does, env var > file > default, the
+  file's key an atom or a string: `{:ok, %{value, source}}`, or
+  `{:error, %{raw, source, fault}}` with the value as found (the env var's
+  string, the file's literal) and the fault as `resolve/4` words it.
+  `resolve/4` is built on it, and so is `<app>-ctl config list`, so the
+  two never disagree.
+  """
+  @spec resolve_setting(spec(), %{String.t() => String.t()}, map(), String.t()) ::
+          {:ok, %{value: term(), source: source()}}
+          | {:error, %{raw: term(), source: source(), fault: String.t()}}
+  def resolve_setting({name, type, default}, env, file, prefix) do
+    var = env_var(prefix, name)
+    key = Atom.to_string(name)
+
+    {result, raw, source, where} =
+      cond do
+        Map.has_key?(env, var) ->
+          {Types.cast(type, env[var]), env[var], :env, var}
+
+        file_key = Enum.find(Map.keys(file), &(key_name(&1) == key)) ->
+          {Types.check(type, file[file_key]), file[file_key], :file, "config.exs #{name}"}
+
+        true ->
+          {{:ok, default}, default, :default, nil}
+      end
+
+    case result do
+      {:ok, value} -> {:ok, %{value: value, source: source}}
+      {:error, why} -> {:error, %{raw: raw, source: source, fault: "#{where}: #{why}"}}
     end
   end
 
@@ -126,11 +140,19 @@ defmodule Macaw.Host.Config do
     end
   end
 
-  @doc "A value as shown: a secret as `set (…last4)` or `unset`, anything else inspected."
+  @doc """
+  A value as shown; anything but a secret is inspected. A secret is
+  `unset` when nil or empty, `set (…last4)` when it is at least 16
+  characters long (so at most a quarter of it shows), else `set`. The
+  generated script's `Ctl.Secret.mask/1` follows the same rule.
+  """
   @spec mask(Types.t(), term()) :: String.t()
-  def mask(:secret, nil), do: "unset"
-  def mask(:secret, v) when byte_size(v) <= 4, do: "set"
-  def mask(:secret, v), do: "set (…" <> String.slice(v, -4, 4) <> ")"
+  def mask(:secret, v) when v in [nil, ""], do: "unset"
+
+  def mask(:secret, v) when is_binary(v) do
+    if String.length(v) >= 16, do: "set (…" <> String.slice(v, -4, 4) <> ")", else: "set"
+  end
+
   def mask(_type, v), do: inspect(v)
 
   @doc "The env var a setting is read from: `PREFIX_NAME`."
@@ -145,8 +167,9 @@ defmodule Macaw.Host.Config do
   @spec put!(Path.t(), [spec()], String.t(), String.t()) :: {:ok, term()} | {:error, String.t()}
   def put!(path, specs, name, text) do
     with {:ok, {key, type}} <- lookup(specs, name),
-         {:ok, value} <- typed(type, text) do
-      Literal.write!(path, Map.put(Literal.read!(path), key, value), header())
+         {:ok, value} <- typed(type, text),
+         {:ok, file} <- read_file(path) do
+      Literal.write!(path, Map.put(drop_key(file, key), key, value), header())
       {:ok, value}
     end
   end
@@ -154,10 +177,32 @@ defmodule Macaw.Host.Config do
   @doc "Removes `name` from the file, so it falls back to its env var or default."
   @spec delete!(Path.t(), [spec()], String.t()) :: :ok | {:error, String.t()}
   def delete!(path, specs, name) do
-    with {:ok, {key, _}} <- lookup(specs, name) do
-      Literal.write!(path, path |> Literal.read!() |> Map.delete(key), header())
+    with {:ok, {key, _}} <- lookup(specs, name),
+         {:ok, file} <- read_file(path) do
+      Literal.write!(path, drop_key(file, key), header())
     end
   end
+
+  @doc """
+  The file at `path` as a map, never raising: `{:ok, map}` (`%{}` when it
+  doesn't exist) or `{:error, message}`, every fault on one line, for the
+  ctl, whose failure is one line.
+  """
+  @spec read_file(Path.t()) :: {:ok, map()} | {:error, String.t()}
+  def read_file(path) do
+    case Literal.read(path) do
+      {:ok, map} -> {:ok, map}
+      {:error, faults} -> {:error, Enum.join(faults, "; ")}
+    end
+  end
+
+  # A file key as a setting's name: an atom or a string; any other term
+  # (a tuple, say) is named by its inspection, so it is unknown, not a crash.
+  defp key_name(key) when is_atom(key) or is_binary(key), do: to_string(key)
+  defp key_name(key), do: inspect(key)
+
+  # A key may be in the file as an atom or a string; an edit replaces either.
+  defp drop_key(file, key), do: Map.drop(file, [key, Atom.to_string(key)])
 
   @doc "The settings' names, in declared order."
   @spec keys([spec()]) :: [atom()]

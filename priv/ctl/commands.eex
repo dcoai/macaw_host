@@ -18,7 +18,9 @@ defmodule Ctl.Commands do
   the settings file if there is none, and seeds the app's configuration
   (`Ctl.App.seeds/0`). `--force` points a script that already has a data
   directory at another. `--migrate` brings an older script's settings and
-  DATA into the new directory instead of seeding.
+  DATA into the new directory instead of seeding; it writes `@data_dir` and
+  the settings file only once the data is copied, so a failed migration
+  leaves this script as it was.
   """
   def init(env, args) do
     {flags, rest} = Enum.split_with(args, &String.starts_with?(&1, "--"))
@@ -38,17 +40,26 @@ defmodule Ctl.Commands do
         dir = rest |> List.first() |> init_dir() |> Path.expand()
 
         with :ok <- make_home(dir),
-             {:ok, env} <- Ctl.Env.with_data_dir(env, dir, env.sys_values),
-             :ok <- write_script_home(env.script, dir),
-             :ok <- write_conf(env, "--migrate" in flags),
-             # Re-read: the settings just written are what the rest uses.
              {:ok, env} <- Ctl.Env.with_data_dir(env, dir, env.sys_values) do
-          IO.puts("#{env.script} now uses #{dir}")
-
           if "--migrate" in flags,
             do: migrate(env),
-            else: seed_config(env)
+            else: init_fresh(env)
         end
+    end
+  end
+
+  defp init_fresh(env) do
+    with {:ok, env} <- adopt(env, false), do: seed_config(env)
+  end
+
+  # Names the directory in this script and writes its settings file, then
+  # re-reads them: the settings just written are what the rest uses.
+  defp adopt(env, migrate?) do
+    with :ok <- write_script_home(env.script, env.data_dir),
+         :ok <- write_conf(env, migrate?),
+         {:ok, env} <- Ctl.Env.with_data_dir(env, env.data_dir, env.sys_values) do
+      IO.puts("#{env.script} now uses #{env.data_dir}")
+      {:ok, env}
     end
   end
 
@@ -152,18 +163,23 @@ defmodule Ctl.Commands do
   # The old layout: settings in `<app>-env` beside the script, data wherever
   # DATA said (a path or a named volume). With the container stopped, the
   # data is copied into data/ (the old copy is left for you to remove) and
-  # the settings the app itself uses become its configuration.
+  # the settings the app itself uses become its configuration. Until the
+  # copy has succeeded nothing is written: the docker steps run with the
+  # settings the file is about to hold, and `@data_dir` and the settings
+  # file follow the copy, so a failure leaves this script as it was.
   defp migrate(env) do
     legacy = Ctl.Env.legacy_path(env)
 
-    with {:ok, _known, extra} <- Ctl.Env.read_file(legacy),
+    with {:ok, known, extra} <- Ctl.Env.read_file(legacy),
          old = Map.new(extra),
          old_data = Map.get(old, "DATA", Ctl.App.default_home()),
-         :ok <- outside_old_data(env, old_data),
-         :ok <- ensure_available_image(env),
-         :ok <- stop(env, []),
-         :ok <- empty_data(env),
-         :ok <- copy_old_data(env, old_data, old["SECRET_KEY_BASE"]),
+         planned = if(env.loaded?, do: env, else: Ctl.Env.with_file_values(env, known)),
+         :ok <- outside_old_data(planned, old_data),
+         :ok <- ensure_available_image(planned),
+         :ok <- stop(planned, []),
+         :ok <- empty_data(planned),
+         :ok <- copy_old_data(planned, old_data, old["SECRET_KEY_BASE"]),
+         {:ok, env} <- adopt(env, true),
          :ok <- migrate_config(env, old),
          :ok <- rename(legacy, legacy <> ".migrated") do
       IO.puts("""
@@ -311,8 +327,11 @@ defmodule Ctl.Commands do
     end)
   end
 
+  # The key is a setting's name, checked before it is looked for, and
+  # matched as written: never a pattern that could match every line.
   defp env_unset(env, key) do
-    with {:ok, text} <- env_text(env) do
+    with :ok <- setting_name(key),
+         {:ok, text} <- env_text(env) do
       case Ctl.Env.edit_unset(text, key) do
         {_, 0} ->
           IO.puts("#{key} is not set in #{env.path}; nothing to do")
@@ -324,6 +343,12 @@ defmodule Ctl.Commands do
           end
       end
     end
+  end
+
+  defp setting_name(key) do
+    if Ctl.Env.setting_name?(key),
+      do: :ok,
+      else: {:error, "#{inspect(key)} is not a valid setting name (A–Z, digits and _, starting with a letter)"}
   end
 
   # A file that is not there yet starts as `init` would write it, so an
@@ -370,6 +395,10 @@ defmodule Ctl.Commands do
 
   defp print_config(objects) do
     Enum.each(objects, fn
+      # A value that doesn't fit its type: what the app would refuse to boot with.
+      %{"name" => name, "value" => value, "source" => source, "fault" => fault} ->
+        IO.puts(String.pad_trailing("#{name}=#{value}", 40) <> " (#{source}) INVALID: #{fault}")
+
       %{"name" => name, "value" => value, "source" => source} ->
         IO.puts(String.pad_trailing("#{name}=#{value}", 40) <> " (#{source})")
 

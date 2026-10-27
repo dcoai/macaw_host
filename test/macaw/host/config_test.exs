@@ -156,6 +156,15 @@ defmodule Macaw.Host.ConfigTest do
       end
     end
 
+    test "mask shows a secret's last four only from 16 characters" do
+      assert Config.mask(:secret, nil) == "unset"
+      assert Config.mask(:secret, "") == "unset"
+      assert Config.mask(:secret, "abcde") == "set"
+      assert Config.mask(:secret, String.duplicate("x", 15)) == "set"
+      assert Config.mask(:secret, String.duplicate("x", 12) <> "1234") == "set (…1234)"
+      assert Config.mask(:port, 4000) == "4000"
+    end
+
     test "load! raises listing every fault", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")
       File.write!(path, "%{port: 0, mode: :open, debug: 3}")

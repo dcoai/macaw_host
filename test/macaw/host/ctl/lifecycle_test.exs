@@ -362,6 +362,81 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       assert out =~ "was copied, not moved"
     end
 
+    test "writes the script and the settings only once the copy has succeeded", %{
+      script: script,
+      home: home
+    } do
+      conf = Path.join(home, "sample.conf")
+      before = File.read!(script)
+
+      # What the host held when the copy ran.
+      copy = fn
+        "docker", ["run", "--rm", "--user", "0:0", "--entrypoint", "sh" | _] ->
+          Process.put(:at_copy, {File.read!(script), File.exists?(conf)})
+
+        _, _ ->
+          false
+      end
+
+      Recorder.install([
+        @daemon_up,
+        @image_present,
+        @running,
+        {copy, {"", 0}},
+        {["docker", "run", "--rm", "--user", "2060:2060"],
+         {~s({"ok":true,"set":"x","restart":"restart to apply"}\n), 0}},
+        {["docker"], {"", 0}},
+        {["timedatectl"], {"Europe/Oslo\n", 0}}
+      ])
+
+      assert {:ok, _} = run(script, ["init", "--migrate", home])
+
+      assert [
+               ["info"],
+               ["image", "inspect", @ref],
+               ["info"],
+               ["container", "inspect", "sample"],
+               ["stop", "-t", "30", "sample"],
+               ["rm", "-f", "sample"],
+               ["run", "--rm", "--user", "0:0", "--entrypoint", "sh" | _] | _
+             ] = Recorder.docker_calls()
+
+      # At the copy, nothing was written yet; after it, both were.
+      assert Process.get(:at_copy) == {before, false}
+      assert {:ok, ^home} = Ctl.Script.data_dir(File.read!(script))
+      assert File.read!(conf) =~ "\nPORT=8080\n"
+    end
+
+    test "a failed copy leaves the script and the settings untouched", %{
+      script: script,
+      legacy: legacy,
+      home: home
+    } do
+      before = File.read!(script)
+
+      Recorder.install([
+        @daemon_up,
+        @image_present,
+        @running,
+        {["docker", "run", "--rm", "--user", "0:0", "--entrypoint", "sh"],
+         {"cp: cannot stat '/old/.': No such file\n", 1}},
+        {["docker"], {"", 0}}
+      ])
+
+      assert {{:error, message}, _} = run(script, ["init", "--migrate", home])
+      assert message =~ "could not copy"
+
+      assert File.read!(script) == before
+      assert {:ok, nil} = Ctl.Script.data_dir(File.read!(script))
+      refute File.exists?(Path.join(home, "sample.conf"))
+      assert File.exists?(legacy)
+
+      refute Enum.any?(
+               Recorder.docker_calls(),
+               &match?(["run", "--rm", "--user", "2060:2060" | _], &1)
+             )
+    end
+
     test "refuses a data directory inside the old data", %{script: script, old_data: old_data} do
       Recorder.install([@daemon_up, @image_present, {["docker"], {"", 0}}])
 

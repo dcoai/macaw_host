@@ -21,7 +21,9 @@ The common commands of every generated `<app>-ctl` (`Ctl.Commands`), as a host r
 3. **creates it and its `data/`.** When it can't (creating it may need root, the one thing the script won't do on its own), it fails printing the exact line to run, `sudo install -d -o "$USER" <dir>`, and to run init again;
 4. **writes `@data_dir` into the script** (mode 0755), only `Ctl.Home` changing ([07 §2](07-ctl-script.md#host-script-home));
 5. **writes `<app>.conf`** (mode 0600) from the settings in effect, **unless it exists,** which is someone's settings and is kept; with `--migrate`, from the old script's host settings over the defaults;
-6. prints `"<script> now uses <dir>"`, then **seeds** the app's configuration (§2.1) or **migrates** (§2.2).
+6. prints `"<script> now uses <dir>"`, then **seeds** the app's configuration (§2.1).
+
+With `--migrate`, steps 4–6 wait: the container is stopped and the data copied first (§2.2), and only then are `@data_dir` and `<app>.conf` written and the migration finished.
 
 ```test:cmd-init
 init <dir> on a script with no directory: the script's data_dir/1 is <dir>, <dir>/data exists, sample.conf starts with the header and holds PORT=4000 and "# The admin console's port.\nADMIN_PORT=4001", and the output says "now uses <dir>" and "ready: ./sample-ctl start"
@@ -41,20 +43,29 @@ with phx_host and tz at their default and phx_scheme set in config.exs, init ask
 
 ### 2.2 Migrating an older setup {#host-cmd-migrate}
 
-`init --migrate [DIR]` brings an older layout (settings in `<app>-env` beside the script, data wherever its `DATA` said, a host path or a named volume) into the new one:
-1. the old file's known host settings start `<app>.conf` (§2 step 5);
+`init --migrate [DIR]` brings an older layout (settings in `<app>-env` beside the script, data wherever its `DATA` said, a host path or a named volume) into the new one. **Nothing is written until the data is copied:** steps 3–6 run with the settings `<app>.conf` is about to hold, and a failure in any of them leaves the script and the settings file as they were, so a retry is the same command, not `init --force --migrate` (macaw_compose#70):
+1. the settings in effect: the old file's known host settings over the defaults (an environment variable still winning), or an existing `<app>.conf`'s;
 2. **refused when the new directory is inside the old data** (a host path), since the copy would copy into itself: `"<dir> is inside the old data at <old> — migrate into a directory outside it"`. `DATA` defaults to the description's `:data_home`;
 3. settings validated, docker answering, the image present;
-4. **the container is stopped first** (§6);
+4. **the container is stopped and removed first** (§6);
 5. **`data/` must be empty:** `"<data> is not empty — migrate into a fresh data directory"`;
-6. **the old data is copied, not moved,** in a throwaway root container of the image ([07 §6](07-ctl-script.md#host-script-docker), `migrate_args/3`): the old data mounted **read-only** at `/old`, `cp -a /old/. <container_data>/`, the session key the old settings held (`SECRET_KEY_BASE`) written to `<container_data>/secret_key_base` (0600) **only when none is there,** passed **by name only**, so nobody is signed out; then the whole volume given to the container user (`chown -R`). The copy never removes or moves anything;
-7. **settings carry over with the old script's effective values:** for each `:migrate_keys` entry, the old file's value, else **the default the old script used** (`:hostname` and `:timezone` resolved on this host), set in the app's configuration (`config set`); an entry with neither is skipped. Otherwise a setting, say the URL scheme, would silently change under the migration;
-8. the old file is renamed `<app>-env.migrated`, and the output says the old data was copied, not moved, and can be removed once the app runs.
+6. **the old data is copied, not moved,** in a throwaway root container of the image ([07 §6](07-ctl-script.md#host-script-docker), `migrate_args/3`): the old data mounted **read-only** at `/old`, `cp -a /old/. <container_data>/`, the session key the old settings held (`SECRET_KEY_BASE`) written to `<container_data>/secret_key_base` (0600) **only when none is there,** passed **by name only**, so nobody is signed out; then the whole volume given to the container user (`chown -R`). The copy never removes or moves anything. A failed copy is `"could not copy <old>: <its output>"`;
+7. **only now** `@data_dir` is written into the script and `<app>.conf` from the settings of step 1 (§2 steps 4–5, an existing file kept), and `"<script> now uses <dir>"` printed;
+8. **settings carry over with the old script's effective values:** for each `:migrate_keys` entry, the old file's value, else **the default the old script used** (`:hostname` and `:timezone` resolved on this host), set in the app's configuration (`config set`); an entry with neither is skipped. Otherwise a setting, say the URL scheme, would silently change under the migration;
+9. the old file is renamed `<app>-env.migrated`, and the output says the old data was copied, not moved, and can be removed once the app runs.
 
 `init --migrate` carries old values as strings, so `:migrate_keys` suit string settings (macaw_compose#48).
 
 ```test:cmd-migrate
 init --migrate <home> with an old PORT, DATA, PHX_HOST and SECRET_KEY_BASE: the script names <home>; sample.conf has PORT=8080 and NAME=sample; stop then rm come before the copy; the copy argv mounts <old>:/old:ro and <data>:/data with -e SECRET_KEY_BASE and no argv element holds the key; the copy script has "cp -a /old/. /data/" and "chown -R 2060:2060 /data" and no rm or mv; the old data is still there; phx_host is set to "old.example" and tz to the host's zone; sample-env is now sample-env.migrated
+```
+
+```test:cmd-migrate-order
+the docker calls run info, image inspect, info, container inspect, stop, rm, then the copy; when the copy runs the script still has @data_dir nil and there is no sample.conf; afterwards the script names <home> and sample.conf has PORT=8080
+```
+
+```test:cmd-migrate-copy-fails
+a copy container exiting 1 answers "could not copy …"; the script is byte for byte as before, there is no sample.conf, sample-env is still there, and no config set is run
 ```
 
 ```test:cmd-migrate-inside
@@ -71,7 +82,7 @@ init --migrate with no sample-env beside the script answers "nothing to migrate:
 - **`list`:** every known key, `KEY=value` and where the value came from (`environment`, `file` or `default`), then every key in the file this script doesn't know, flagged `(file, unknown to <app>-ctl)`, so a typo is visible rather than silently ignored. **Secrets are masked** unless `--reveal` ([07 §4](07-ctl-script.md#host-script-secret)).
 - **`get KEY`:** the value, masked likewise; a key neither known nor in the file is `"<KEY> is not set in <path>"`.
 - **`set KEY=VALUE…`:** each pair must be `KEY=VALUE` (`"expected KEY=VALUE, got …"`) with a valid name (`"<KEY> is not a valid setting name (letters, digits and _)"`). **A key that is now the app's own configuration is refused with a pointer to `config`** (`"<KEY> is <Title>'s own configuration now: ./<app>-ctl config set <config key> VALUE"`). A key this script doesn't know is accepted (the file is free-form) and flagged `(not a setting <app>-ctl knows)`. The known values are **validated before anything is written** ([07 §5.4](07-ctl-script.md#host-script-env-validate)); then each is set in the file's text ([07 §5.3](07-ctl-script.md#host-script-env-edit)), the file written 0600 (a file not there yet starts as `init` would write it), `set KEY` printed for each, and `"<path> updated — ./<app>-ctl restart to apply"`. **`set` never echoes a value.**
-- **`unset KEY`:** removes the key's active lines; when there were none, `"<KEY> is not set in <path>; nothing to do"`; else `unset KEY` and the restart line. The key is matched as written, unchecked.
+- **`unset KEY`:** KEY must be a setting's name, an upper-case letter then upper-case letters, digits and `_` (`^[A-Z][A-Z0-9_]*$`), else `"<KEY, inspected> is not a valid setting name (A–Z, digits and _, starting with a letter)"` and the file untouched. It removes the key's active lines, **matched as written, never as a pattern** (the key is escaped; before macaw_compose#70 it was a regular expression, and `env unset '.*'` removed every line); when there were none, `"<KEY> is not set in <path>; nothing to do"`; else `unset KEY` and the restart line.
 
 ```test:cmd-env-list
 with PORT=8080 and REGISTRY_TOKEN=abcdefghijkl1234 in sample.conf: list shows "PORT=8080 (file)", "ADMIN_PORT=4001 (default)" and "REGISTRY_TOKEN=set (…1234) (file, unknown to sample-ctl)", never "abcdefghijkl"; list --reveal shows the token
@@ -81,11 +92,15 @@ with PORT=8080 and REGISTRY_TOKEN=abcdefghijkl1234 in sample.conf: list shows "P
 set PORT=9090 ADMIN_PORT=9091 over "# mine\nPORT=8080\n" leaves "# mine\nPORT=9090\nADMIN_PORT=9091\n" and says restart to apply; set PHX_HOST=x is refused with the pointer to config set phx_host
 ```
 
+```test:cmd-env-unset
+over "# mine\nPORT=8080\nNAME=x\nPORTS=1\n", unset of ".*", "P.RT", "port", "PORT=", "1PORT" and "" is each refused as not a valid setting name with the file unchanged; unset PORT leaves "# mine\nNAME=x\nPORTS=1\n"
+```
+
 ## 4. config {#host-cmd-config}
 
 `./<app>-ctl config list | get KEY | set KEY VALUE | unset KEY` is **the app's own configuration,** kept on the data volume (`config.exs`) and **changed by the app itself** (`Ctl.Commands.config/2`): `<Release>.config()` in a throwaway container of the image, as the app's uid ([07 §6](07-ctl-script.md#host-script-docker)), so it works whether or not the app is running.
 - **The words travel as JSON in `<PREFIX>_CTL_ARGS`, by name, never on a command line;** the answer is one JSON object per line ([03 §3](03-release.md#host-release-config)).
-- **Output:** a setting as `name=value (source)`; `set name`; `unset name`; any other object as its JSON line. After `set` or `unset`: `"<Title>'s configuration updated — ./<app>-ctl restart to apply"`.
+- **Output:** a setting as `name=value (source)`, and one the app reports with a `fault` (a value that doesn't fit its type, [03 §3](03-release.md#host-release-config)) as `name=value (source) INVALID: <fault>`; `set name`; `unset name`; any other object as its JSON line. After `set` or `unset`: `"<Title>'s configuration updated — ./<app>-ctl restart to apply"`.
 - **The release's failure** (its one line on stderr reaching the terminal as it is) **passes its exit status on.**
 - **The app masks its secrets itself, and never shows them;** `config` has no `--reveal` (macaw_compose#48).
 - `VALUE` is a literal as the app reads it: a string is typed with its quotes, `config set tz '"Europe/Oslo"'`.
@@ -96,6 +111,10 @@ config set tz "\"Europe/Oslo\"" runs exactly one eval container with -e SAMPLE_C
 
 ```test:cmd-config-list
 config list prints tz="Etc/UTC" (default) and smtp_password=set (…tery) (config.exs), and sent ["list"]
+```
+
+```test:cmd-config-invalid
+a listing with port "\"eighty\"" from env SAMPLE_PORT and its fault prints port="eighty" (env SAMPLE_PORT) INVALID: SAMPLE_PORT: must be a port number …
 ```
 
 ```test:cmd-config-failure

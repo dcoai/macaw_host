@@ -18,16 +18,38 @@ defmodule Macaw.Host.Health do
 
   A check that raises is reported as an error naming the exception, never
   a crash of the report: the point of a health check is to answer while
-  something is broken. `Macaw.Host.Health.Plug` serves the report as JSON,
-  `200` when healthy and `503` when not.
+  something is broken. The whole report answers within its deadline (5 s
+  unless `:deadline` says otherwise): the checks run side by side, each
+  given the time left, and one that misses it is reported as timed out.
+  `Macaw.Host.Health.Plug` serves the report as JSON, `200` when healthy
+  and `503` when not.
   """
 
-  @type check :: (-> :ok | {:error, String.t()} | {:warn, String.t()})
+  @type check :: (-> :ok | {:error, term()} | {:warn, term()})
 
-  @doc "Runs the checks and builds the report; `extra` is merged in (version, build)."
-  @spec report([{atom(), check()}], keyword()) :: map()
-  def report(checks, extra \\ []) do
-    results = Map.new(checks, fn {name, check} -> {name, run(check)} end)
+  @deadline 5_000
+  @reserved [:healthy, :checks]
+
+  @doc """
+  Runs the checks and builds the report; `extra` is merged in (version,
+  build), and may not set `:healthy` or `:checks` (an `ArgumentError`, at
+  the call). Options: `:deadline`, the whole report's, in milliseconds
+  (default 5000).
+  """
+  @spec report([{atom(), check()}], keyword(), keyword()) :: map()
+  def report(checks, extra \\ [], opts \\ []) do
+    case Enum.filter(@reserved, &Keyword.has_key?(extra, &1)) do
+      [] ->
+        :ok
+
+      taken ->
+        raise ArgumentError,
+              "a health report's extra may not set #{Enum.map_join(taken, " or ", &inspect/1)}: " <>
+                "the report computes them"
+    end
+
+    deadline = Keyword.get(opts, :deadline, @deadline)
+    results = run_all(checks, deadline)
 
     healthy =
       Enum.all?(results, fn {_, r} -> r == "ok" or String.starts_with?(r, "warning: ") end)
@@ -35,20 +57,34 @@ defmodule Macaw.Host.Health do
     Map.merge(%{healthy: healthy, checks: results}, Map.new(extra))
   end
 
-  # A check runs in its own process, so one that raises or exits is reported
-  # by its exit reason (never rescued) and the report still answers.
-  defp run(check) do
-    task = Task.Supervisor.async_nolink(Macaw.Host.Health.Tasks, check)
+  # Each check runs in its own process, so one that raises or exits is
+  # reported by its exit reason (never rescued) and the report still
+  # answers. They start together; each is waited for only as long as the
+  # report's deadline leaves, then killed.
+  defp run_all(checks, deadline) do
+    ends_at = System.monotonic_time(:millisecond) + deadline
 
-    case Task.yield(task, 5_000) || Task.shutdown(task, :brutal_kill) do
-      {:ok, :ok} -> "ok"
-      {:ok, {:error, detail}} -> "error: " <> detail
-      {:ok, {:warn, detail}} -> "warning: " <> detail
-      {:ok, other} -> "error: check returned #{inspect(other)}"
-      {:exit, reason} -> "error: " <> Exception.format_exit(reason)
-      nil -> "error: no answer in 5 s"
-    end
+    checks
+    |> Enum.map(fn {name, check} ->
+      {name, Task.Supervisor.async_nolink(Macaw.Host.Health.Tasks, check)}
+    end)
+    |> Map.new(fn {name, task} ->
+      left = max(ends_at - System.monotonic_time(:millisecond), 0)
+      {name, result(Task.yield(task, left) || Task.shutdown(task, :brutal_kill), deadline)}
+    end)
   end
+
+  defp result({:ok, :ok}, _deadline), do: "ok"
+  defp result({:ok, {:error, detail}}, _deadline), do: "error: " <> detail(detail)
+  defp result({:ok, {:warn, detail}}, _deadline), do: "warning: " <> detail(detail)
+  defp result({:ok, other}, _deadline), do: "error: check returned #{inspect(other)}"
+  defp result({:exit, reason}, _deadline), do: "error: " <> Exception.format_exit(reason)
+
+  defp result(nil, deadline),
+    do: "error: timed out (no answer within the report's #{deadline} ms)"
+
+  defp detail(detail) when is_binary(detail), do: detail
+  defp detail(detail), do: inspect(detail)
 
   @doc "Whether a directory is writable, by writing and removing a probe file."
   @spec writable(Path.t()) :: :ok | {:error, String.t()}

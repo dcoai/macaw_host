@@ -44,6 +44,33 @@ defmodule Macaw.Host.ReleaseTest do
                Release.config_command(path, @specs, "RT", ["get", "smtp_password"])
     end
 
+    test "a file key written as a string is the file's value, not the default", %{tmp_dir: dir} do
+      path = Path.join(dir, "config.exs")
+      File.write!(path, ~s(%{"port" => 9090}))
+
+      assert {:ok, [%{name: :port, value: "9090", source: "config.exs"}]} =
+               Release.config_command(path, @specs, "RT", ["get", "port"])
+    end
+
+    test "an env value is shown typed, as load! would read it, or as a fault", %{tmp_dir: dir} do
+      path = Path.join(dir, "config.exs")
+
+      env = %{"RT_PORT" => " 8080 ", "RT_MODE" => "ajar"}
+
+      assert {:ok, list} = Release.config_command(path, @specs, "RT", ["list"], env)
+
+      assert %{name: :port, value: "8080", source: "env RT_PORT"} in list
+
+      assert %{
+               name: :mode,
+               value: ~s("ajar"),
+               source: "env RT_MODE",
+               fault: "RT_MODE: must be one of open, closed"
+             } in list
+
+      assert %{name: :smtp_password, value: "unset", source: "default"} in list
+    end
+
     test "bad input is an answer, not a crash", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")
 
@@ -92,6 +119,23 @@ defmodule Macaw.Host.ReleaseTest do
 
       assert {"RT_CTL_ARGS must be a JSON array of strings\n", 1} =
                eval(code, [{"RT_CTL_ARGS", "[1, 2]"}])
+    end
+
+    test "a broken config.exs fails with one line on stderr and status 1", %{tmp_dir: dir} do
+      File.write!(Path.join(dir, "config.exs"), "%{\n  port: x,\n  mode: @doc\n}\n")
+
+      code = """
+      Application.put_env(:rt_app, :data_dir, #{inspect(dir)})
+      Macaw.Host.Release.config(:rt_app, [{:port, :port, 4000}], "RT")
+      """
+
+      for args <- [~s(["list"]), ~s(["get", "port"]), ~s(["set", "port", "1"])] do
+        assert {out, 1} = eval(code, [{"RT_CTL_ARGS", args}])
+        assert [line] = String.split(out, "\n", trim: true)
+        assert line =~ "config.exs:2: not a literal: x"
+        assert line =~ "config.exs:3: not a literal: @doc"
+        refute line =~ "ArgumentError"
+      end
     end
 
     test "migrate without a repo configured fails loudly, not silently", %{tmp_dir: _dir} do

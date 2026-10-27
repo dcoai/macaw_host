@@ -14,7 +14,7 @@ defmodule Macaw.Host.Config.Types do
   | `:string_list` | a list of strings | comma-separated |
   | `{:custom, {m, f}}` | `m.f(value)` returns `{:ok, v}` or `{:error, message}` | the same, given the string |
 
-  A `:secret` is masked wherever a value is shown (`Macaw.Host.Config.show/2`).
+  A `:secret` is masked wherever a value is shown (`Macaw.Host.Config.show/1`, `Macaw.Host.Config.mask/2`).
   Enum names from env vars are compared as strings, so no atom is made.
   """
 

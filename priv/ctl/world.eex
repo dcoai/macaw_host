@@ -133,7 +133,8 @@ end
 defmodule Ctl.Secret do
   @moduledoc """
   Which values are secrets, and how one is shown. A secret is printed as
-  `set (…last four)` — enough to tell two keys apart, not enough to use —
+  `set (…last four)` when it is 16 characters or more (enough to tell two
+  keys apart, not enough to use), `set` when shorter, `unset` when empty —
   unless the command was given `--reveal`. `set` never echoes a value at all.
   A database URL keeps everything but its password, which is what someone
   checking the setting needs to see.
@@ -164,10 +165,16 @@ defmodule Ctl.Secret do
     end
   end
 
-  @doc "`set (…abcd)` for a value long enough that four characters give nothing away."
-  def mask(""), do: ""
-  def mask(value) when byte_size(value) > 8, do: "set (…#{String.slice(value, -4..-1//1)})"
-  def mask(_value), do: "set"
+  @doc """
+  `unset` for nothing, `set (…abcd)` for a value of at least 16 characters
+  (so at most a quarter of it shows), else `set`: the rule the app's
+  `config list` masks with too (`Macaw.Host.Config.mask/2`).
+  """
+  def mask(value) when value in [nil, ""], do: "unset"
+
+  def mask(value) do
+    if String.length(value) >= 16, do: "set (…" <> String.slice(value, -4, 4) <> ")", else: "set"
+  end
 
   @doc "A URL with the password in its userinfo replaced by `****`."
   def mask_url(value) do

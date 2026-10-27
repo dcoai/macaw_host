@@ -53,6 +53,55 @@ defmodule Macaw.Host.HealthTest do
     assert report.checks.fine == "ok"
   end
 
+  test "a detail that is not a string is inspected, not a crash" do
+    report =
+      Health.report(
+        db: fn -> {:error, :econnrefused} end,
+        peers: fn -> {:warn, %{untrusted: 1}} end
+      )
+
+    refute report.healthy
+    assert report.checks.db == "error: :econnrefused"
+    assert report.checks.peers == "warning: %{untrusted: 1}"
+  end
+
+  test "extra may not set :healthy or :checks: refused at the call" do
+    error =
+      assert_raise ArgumentError, fn ->
+        Health.report([db: fn -> {:error, "down"} end], healthy: true, checks: %{}, build: "x")
+      end
+
+    assert error.message =~ ":healthy"
+    assert error.message =~ ":checks"
+    refute error.message =~ ":build"
+  end
+
+  test "the deadline is the whole report's, and a check that misses it is timed out" do
+    started = System.monotonic_time(:millisecond)
+
+    report =
+      Health.report(
+        [
+          quick: fn -> :ok end,
+          slow: fn -> Process.sleep(150) end,
+          slower: fn -> Process.sleep(150) end,
+          stuck: fn -> Process.sleep(10_000) end,
+          stuck_too: fn -> Process.sleep(10_000) end
+        ],
+        [],
+        deadline: 400
+      )
+
+    elapsed = System.monotonic_time(:millisecond) - started
+
+    assert report.checks.quick == "ok"
+    assert {report.checks.slow, report.checks.slower} == {"ok", "ok"}
+    assert report.checks.stuck =~ ~r/^error: timed out/
+    assert report.checks.stuck_too =~ ~r/^error: timed out/
+    refute report.healthy
+    assert elapsed < 1_000
+  end
+
   describe "the plug" do
     def healthy, do: %{healthy: true, checks: %{}}
     def unhealthy, do: %{healthy: false, checks: %{db: "error: down"}}

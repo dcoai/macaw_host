@@ -177,6 +177,25 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       assert opts[:env] == [{"SAMPLE_CTL_ARGS", ~s(["list"])}]
     end
 
+    test "a value that doesn't fit its type is shown as invalid, with the fault",
+         %{script: script} do
+      listing =
+        ~s({"name":"port","value":"\\"eighty\\"","source":"env SAMPLE_PORT",) <>
+          ~s|"fault":"SAMPLE_PORT: must be a port number (1–65535)"}\n|
+
+      Recorder.install([
+        @daemon_up,
+        @image_present,
+        @owned,
+        {["docker", "run", "--rm", "--user", "2060:2060"], {listing, 0}}
+      ])
+
+      assert {:ok, out} = run(script, ["config", "list"])
+
+      assert out =~
+               ~r/^port="eighty"\s+\(env SAMPLE_PORT\) INVALID: SAMPLE_PORT: must be a port number/m
+    end
+
     test "the release's failure passes its status on", %{script: script} do
       Recorder.install([
         @daemon_up,
@@ -282,6 +301,23 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       assert {{:error,
                "PHX_HOST is Sample's own configuration now: ./sample-ctl config set phx_host VALUE"},
               _} = run(script, ["env", "set", "PHX_HOST=x"])
+    end
+
+    test "unset takes a setting name, matched as written, never a pattern",
+         %{script: script, home: home} do
+      conf = Path.join(home, "sample.conf")
+      File.write!(conf, "# mine\nPORT=8080\nNAME=x\nPORTS=1\n")
+      Recorder.install()
+
+      for key <- [".*", "P.RT", "port", "PORT=", "1PORT", ""] do
+        assert {{:error, message}, _} = run(script, ["env", "unset", key])
+        assert message =~ "is not a valid setting name"
+        assert File.read!(conf) == "# mine\nPORT=8080\nNAME=x\nPORTS=1\n"
+      end
+
+      assert {:ok, out} = run(script, ["env", "unset", "PORT"])
+      assert out =~ "unset PORT"
+      assert File.read!(conf) == "# mine\nNAME=x\nPORTS=1\n"
     end
   end
 

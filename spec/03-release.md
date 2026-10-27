@@ -53,7 +53,7 @@ in a fresh VM, migrate of an app with no :ecto_repos exits non-zero with output 
 
 `Macaw.Host.Release.config/3` is `<app>-ctl config`, over the app's literal `config.exs` at `<data_dir>/config.exs` (`:data_dir` from the app's environment, after loading the app). It reads the arguments with `ctl_args!/1`, runs them with `config_command/4`, then emits each answer object or fails with the message.
 
-`Macaw.Host.Release.config_command/4` is the commands, pure apart from the file: `{:ok, objects}` or `{:error, message}`. It reads the file with `Macaw.Host.Config.Literal.read!/1` (a missing file is empty; a file with faults raises).
+`Macaw.Host.Release.config_command/5` is the commands, pure apart from the file and its fifth argument, the environment (`System.get_env/0` by default): `{:ok, objects}` or `{:error, message}`. It reads the file with `Macaw.Host.Config.read_file/1`: a missing file is empty, and **a file with faults is the error, every fault on one line,** so `config/3` answers it as the protocol says, one stderr line and exit status 1, never a stack trace (macaw_compose#70).
 
 | Arguments | Answer |
 |---|---|
@@ -63,8 +63,10 @@ in a fresh VM, migrate of an app with no :ecto_repos exits non-zero with output 
 | `["unset", NAME]` | `Macaw.Host.Config.delete!/3`, then `{"ok": true, "unset": NAME, "restart": "restart to apply"}`, or its error |
 | anything else | `"usage: config list \| get NAME \| set NAME VALUE \| unset NAME"` |
 
-- **A setting's `source`** is `"env <VAR>"` when its env var is set in the process (even empty), else `"config.exs"` when the file has it (as an atom key), else `"default"`.
-- **Its `value` is shown, never raw:** `Macaw.Host.Config.mask/2` of the env var's string, the file's value or the default, so a secret is masked and anything else `inspect`ed (`":closed"`, `"8443"` for an integer from the file). An env value is shown as the string it is, not cast or checked.
+- **`list` and `get` show each setting as the app would load it,** through `Macaw.Host.Config.resolve_setting/4`, the path `Macaw.Host.Config.load!/3` takes ([01 §3](01-config.md#host-config-resolve)): an env var cast by its type, a file key written as an atom or a string, else the default.
+- **A setting's `source`** is `"env <VAR>"` when its env var is set (even empty), else `"config.exs"` when the file has it, else `"default"`.
+- **Its `value` is the resolved, typed value, shown:** `Macaw.Host.Config.mask/2` of it, so a secret is masked ([01 §5.1](01-config.md#host-config-mask)) and anything else `inspect`ed (`":closed"`, `"8443"` for a port, from the file or from an env var `" 8443 "`).
+- **A value that doesn't fit its type** is shown as found (masked likewise) with a fourth key, `fault`, the fault the app's boot would raise (`"RT_MODE: must be one of open, closed"`). The script prints it as invalid ([08 §4](08-ctl-commands.md#host-cmd-config)).
 - **Every edit answers "restart to apply":** nothing restarts on its own.
 - `VALUE` is a literal as typed: a string value is typed with its quotes (`"\"Europe/Oslo\""`).
 
@@ -74,6 +76,18 @@ set port "8443", get port (value "8443", source "config.exs"), list (mode ":clos
 
 ```test:release-config-secret
 after set smtp_password "\"correct-horse-battery\"", get smtp_password shows "set (…tery)"
+```
+
+```test:release-config-string-key
+with %{"port" => 9090} in the file, get port is value "9090" from "config.exs", not the default
+```
+
+```test:release-config-env-typed
+with RT_PORT " 8080 " and RT_MODE "ajar": list shows port "8080" from "env RT_PORT"; mode "\"ajar\"" from "env RT_MODE" with fault "RT_MODE: must be one of open, closed"; smtp_password "unset" from "default"
+```
+
+```test:release-config-broken
+in a fresh VM, list, get and set over a config.exs with faults on lines 2 and 3 each print exactly one line naming both faults, no exception, and exit with status 1
 ```
 
 ```test:release-config-errors

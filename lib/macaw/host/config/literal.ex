@@ -21,6 +21,20 @@ defmodule Macaw.Host.Config.Literal do
     end
   end
 
+  @doc """
+  As `read!/1`, without raising: `{:ok, map}` (`%{}` when the file doesn't
+  exist) or `{:error, faults}`, every parse fault, or the one reason the
+  file can't be read.
+  """
+  @spec read(Path.t()) :: {:ok, map()} | {:error, [String.t()]}
+  def read(path) do
+    case File.read(path) do
+      {:ok, text} -> parse(text, path)
+      {:error, :enoent} -> {:ok, %{}}
+      {:error, reason} -> {:error, ["cannot read #{path}: #{:file.format_error(reason)}"]}
+    end
+  end
+
   @doc "Parses a config file's text to a map; raises `ArgumentError` listing every fault."
   @spec parse!(String.t(), Path.t()) :: map()
   def parse!(text, path \\ "config.exs") do

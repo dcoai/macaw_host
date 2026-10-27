@@ -57,7 +57,7 @@ Ctl.World.Real.cmd/3 of an executable not on PATH answers {"", 127} without rais
 `Ctl.Secret` decides what may be printed:
 - `Ctl.Secret.secret?/1`: `SECRET_KEY_BASE`, and any key ending in `_KEY`, `_SECRET`, `_TOKEN` or `_PASSWORD`, in either case;
 - `Ctl.Secret.display/3`: a value as it may be printed for its key. With reveal, the value; `DATABASE_URL` (either case) with its password masked; a secret masked; anything else as it is;
-- `Ctl.Secret.mask/1`: `""` stays `""`; a value longer than eight bytes is `"set (…<last four>)"`, enough to tell two keys apart and not enough to use; a shorter one is `"set"`;
+- `Ctl.Secret.mask/1`: a value by the masking rule, the app's own ([01 §5.1](01-config.md#host-config-mask)): `nil` or empty is `"unset"`, 16 characters or more `"set (…<last four>)"`, anything shorter `"set"`;
 - `Ctl.Secret.mask_url/1`: a URL with the password in its userinfo replaced by `****` (`postgres://app:****@db/app`), which is what someone checking the setting needs to see;
 - `Ctl.Secret.reveal/1` splits `--reveal` out of a command's arguments: `{revealed?, args}`.
 

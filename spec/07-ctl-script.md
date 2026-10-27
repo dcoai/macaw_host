@@ -67,6 +67,10 @@ Ctl.World.Real.cmd/3 of an executable not on PATH answers {"", 127} without rais
 env list shows REGISTRY_TOKEN "abcdefghijkl1234" as "set (…1234)" and never its first twelve characters; with --reveal it shows the value; mask_url of "postgres://app:pw@db/app" is "postgres://app:****@db/app"
 ```
 
+```test:script-secret-mask
+Ctl.Secret.mask/1 of nil and "" is "unset"; of "abcde", "abcdefghi", 15 x's and 15 é's "set"; of 12 x's then "1234" "set (…1234)" and of 12 é's then "wxyz" "set (…wxyz)"
+```
+
 ## 5. Host settings {#host-script-env}
 
 `Ctl.Env` is the host settings: what docker needs to run the container, and nothing the application itself uses (that is `config`, on the data volume). The keys are `Ctl.App.settings/0`'s, in order: the six every script has, then the app's own ([06 §3.4](06-ctl-generator.md#host-gen-derived)). `Ctl.Env.keys/0` is them.
@@ -184,4 +188,8 @@ run as a program, an unknown command exits 1 with "unknown command: frob" on std
 
 ```test:script-app-needs-home
 an app command run by a script with no data directory answers "no data directory yet — ./sample-ctl init [DIR]" and calls nothing
+```
+
+```test:script-app-dispatch
+with a data directory, the sample's own command ping goes to Ctl.AppCommands.run/3: its last docker call is exec sample /app/bin/sample rpc Sample.Release.ping(), and the answer is the app's output
 ```

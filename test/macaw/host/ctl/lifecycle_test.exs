@@ -61,6 +61,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
   end
 
   describe "update, when the image carries a different script" do
+    @tag verifies: "cmd-update-replace"
     test "writes it with this host's @data_dir, keeps the old one as .bak, hands the restart over",
          %{tmp_dir: tmp_dir} do
       {script, home} = installed!(tmp_dir)
@@ -104,6 +105,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       refute ["stop", "-t", "30", "sample"] in Recorder.docker_calls()
     end
 
+    @tag verifies: "cmd-update-handed"
     test "the script it hands over to does not update itself again", %{tmp_dir: tmp_dir} do
       {script, _home} = installed!(tmp_dir)
       current = File.read!(script)
@@ -139,7 +141,10 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       out
     end
 
-    test "when the fresh script lacks the @data_dir line", %{script: script, current: current} do
+    @tag verifies: "cmd-update-refuse"
+    test "when the fresh script lacks the line in Ctl.Home, or is no script at all",
+         %{script: script, current: current} do
+      # The fresh script lacks the @data_dir line.
       fresh = String.replace(newer_script(), "  @data_dir nil\n", "")
       refute fresh =~ ~r/^\s*@data_dir\b/m
 
@@ -147,10 +152,8 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
 
       assert out =~
                "not replacing sample-ctl with the one in #{@ref}: this script has no @data_dir line in Ctl.Home"
-    end
 
-    test "when the fresh script's only @data_dir is outside Ctl.Home, as older scripts had it",
-         %{script: script, current: current} do
+      # Its only @data_dir is outside Ctl.Home, as older scripts had it.
       fresh =
         newer_script()
         |> String.replace("  @data_dir nil\n", "")
@@ -161,19 +164,17 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
 
       out = refused(script, current, {fresh, 0})
       assert out =~ "this script has no @data_dir line in Ctl.Home"
-    end
 
-    test "when the image has no bin/ctl", %{script: script, current: current} do
+      # The image has no bin/ctl.
       refused(script, current, {"", 1})
-    end
 
-    test "when bin/ctl prints something that is not this kind of script",
-         %{script: script, current: current} do
+      # bin/ctl prints something that is not this kind of script.
       refused(script, current, {"exec: bin/ctl: not found\n", 0})
     end
   end
 
   describe "splicing the @data_dir line" do
+    @tag verifies: "script-home-only"
     test "an older script whose @data_dir is outside Ctl.Home is never treated as holding one" do
       older = """
       #!/usr/bin/env elixir
@@ -189,6 +190,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
                Ctl.Script.splice(CtlFixture.script(), older)
     end
 
+    @tag verifies: "script-splice-only-home"
     test "only Ctl.Home's line changes, never a same-named attribute elsewhere" do
       fresh =
         String.replace(
@@ -209,6 +211,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
   end
 
   describe "update, when the image's script is this one" do
+    @tag verifies: "cmd-update-same"
     test "writes nothing, keeps no .bak, and recreates the container", %{tmp_dir: tmp_dir} do
       {script, home} = installed!(tmp_dir)
       current = File.read!(script)
@@ -247,6 +250,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       assert out =~ "sample is running"
     end
 
+    @tag verifies: "cmd-update-unchanged"
     test "with an unchanged image and no container, only says so", %{tmp_dir: tmp_dir} do
       {script, _home} = installed!(tmp_dir)
       current = File.read!(script)
@@ -284,6 +288,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       %{script: script, legacy: legacy, old_data: old_data, home: Path.join(tmp_dir, "home")}
     end
 
+    @tag verifies: "cmd-migrate"
     test "stops the container, copies the data, carries the effective settings over", %{
       script: script,
       legacy: legacy,
@@ -362,6 +367,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       assert out =~ "was copied, not moved"
     end
 
+    @tag verifies: "cmd-migrate-order"
     test "writes the script and the settings only once the copy has succeeded", %{
       script: script,
       home: home
@@ -407,6 +413,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       assert File.read!(conf) =~ "\nPORT=8080\n"
     end
 
+    @tag verifies: "cmd-migrate-copy-fails"
     test "a failed copy leaves the script and the settings untouched", %{
       script: script,
       legacy: legacy,
@@ -437,6 +444,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
              )
     end
 
+    @tag verifies: "cmd-migrate-inside"
     test "refuses a data directory inside the old data", %{script: script, old_data: old_data} do
       Recorder.install([@daemon_up, @image_present, {["docker"], {"", 0}}])
 
@@ -447,6 +455,7 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
       refute Enum.any?(Recorder.docker_calls(), &match?(["run" | _], &1))
     end
 
+    @tag verifies: "cmd-migrate-nothing"
     test "with nothing to migrate, says so", %{tmp_dir: tmp_dir} do
       script =
         Recorder.script!(
@@ -462,7 +471,9 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
   end
 
   describe "shell" do
-    test "opens /bin/sh in the running container, attached to the terminal", %{tmp_dir: tmp_dir} do
+    @tag verifies: "cmd-shell"
+    test "opens /bin/sh in the running container, attached to the terminal; refused when stopped",
+         %{tmp_dir: tmp_dir} do
       {script, _home} = installed!(tmp_dir)
       Recorder.install([@daemon_up, @running, {["docker", "exec"], {"", 0}}])
 
@@ -470,10 +481,8 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
 
       assert List.last(Recorder.calls()) ==
                {"docker", ["exec", "-it", "sample", "/bin/sh"], [tty: true]}
-    end
 
-    test "refuses when the container is not running", %{tmp_dir: tmp_dir} do
-      {script, _home} = installed!(tmp_dir)
+      # The container is not running.
       Recorder.install([@daemon_up])
 
       assert {{:error, "sample is not running — ./sample-ctl start"}, _} = run(script, ["shell"])

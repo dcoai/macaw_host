@@ -13,7 +13,11 @@ A **check** is a function of no arguments (`Macaw.Host.Health.check()`) returnin
 
 Built in:
 - `Macaw.Host.Health.writable/1`: a directory is writable, shown by writing and removing a probe file in it; else `{:error, "<dir> is not writable (<reason>)"}`;
+
+<!-- surfex: health-database -->
 - `Macaw.Host.Health.database/1`: a repo answers `SELECT 1`; else `{:error, <the error's message>}`. Requires `ecto_sql`;
+
+<!-- surfex: health-migrations -->
 - `Macaw.Host.Health.migrations/1`: every migration has run; else `{:error, "<n> pending"}`. Requires `ecto_sql`.
 
 ```test:health-detail

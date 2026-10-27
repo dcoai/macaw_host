@@ -10,7 +10,7 @@
 | [03 — Release entry points](03-release.md) | `Macaw.Host.Release`: the ctl protocol, `migrate`, the config commands, `status` | implemented (v0.1.1) |
 | [04 — Health](04-health.md) | `Macaw.Host.Health`, `Macaw.Host.Health.Plug`: the check contract, the report, `200`/`503` | implemented (v0.1.1) |
 | [05 — Build info](05-build.md) | `Macaw.Host.Build`: the build's SHA and version, fixed when the app compiles | implemented (v0.1.1) |
-| [06 — The ctl generator](06-ctl-generator.md) | `mix macaw.host.ctl`, `Macaw.Host.Ctl`, `Macaw.Host.Ctl.Description`, the `Ctl.AppCommands` contract, `Macaw.Host.Ctl.Recorder` | implemented (v0.1.1) |
+| [06 — The ctl generator](06-ctl-generator.md) | `mix macaw.host.ctl`, `Macaw.Host.Ctl`, `Macaw.Host.Ctl.Description`, the `Ctl.AppCommands` contract, `Macaw.Host.Ctl.Recorder` | implemented (v0.1.2) |
 | [07 — The generated script](07-ctl-script.md) | the `<app>-ctl` script's modules: the one line of host state, the world, secrets, host settings, every docker command line, dispatch | implemented (v0.1.1) |
 | [08 — The script's commands](08-ctl-commands.md) | `init` (and `--migrate`), `env`, `config`, `start`, `stop`, `restart`, `update`, `status`, `logs`, `shell`; what an adopting app provides | implemented (v0.1.1) |
 

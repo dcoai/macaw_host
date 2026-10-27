@@ -233,23 +233,50 @@ defmodule Macaw.Host.Ctl do
   def compare(generated, generated), do: :ok
 
   def compare(generated, committed) do
-    wanted = String.split(generated, "\n")
-    found = String.split(committed, "\n")
-    width = max(length(wanted), length(found))
+    wanted = lines(generated)
+    found = lines(committed)
 
     {line, want, got} =
-      Enum.find_value(0..(width - 1), fn i ->
-        want = Enum.at(wanted, i)
-        got = Enum.at(found, i)
-        if want != got, do: {i + 1, want, got}
-      end)
+      case first_difference(wanted, found) do
+        nil ->
+          # Every line agrees: only the newline at the end of one differs.
+          last = length(wanted)
+          {last, ending(List.last(wanted), generated), ending(List.last(found), committed)}
+
+        {line, want, got} ->
+          {line, describe_line(want), describe_line(got)}
+      end
 
     {:error,
      """
      the committed script differs from what the generator makes, first at line #{line}:
-       generated: #{describe_line(want)}
-       committed: #{describe_line(got)}\
+       generated: #{want}
+       committed: #{got}\
      """}
+  end
+
+  # A text's lines; the newline ending the last one starts no line of its own.
+  defp lines(text) do
+    case String.split(text, "\n") do
+      [""] -> []
+      split -> if String.ends_with?(text, "\n"), do: Enum.drop(split, -1), else: split
+    end
+  end
+
+  defp first_difference(wanted, found) do
+    width = max(length(wanted), length(found))
+
+    Enum.find_value(0..(width - 1)//1, fn i ->
+      want = Enum.at(wanted, i)
+      got = Enum.at(found, i)
+      if want != got, do: {i + 1, want, got}
+    end)
+  end
+
+  defp ending(line, text) do
+    if String.ends_with?(text, "\n"),
+      do: inspect(line),
+      else: inspect(line) <> " (no newline at the end of the file)"
   end
 
   defp describe_line(nil), do: "(end of file)"

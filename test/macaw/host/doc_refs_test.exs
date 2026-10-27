@@ -9,19 +9,38 @@ defmodule Macaw.Host.DocRefsTest do
 
   @ref ~r/`((?:Macaw|Ctl)(?:\.[A-Z]\w*)*)\.([a-z_]\w*[?!]?)\/(\d+)`/
 
-  test "every Module.fun/arity a doc names exists" do
+  # Every `Module.fun/arity` the macaw_host application's docs name: {where, ref, module, fun, arity}.
+  defp refs do
     {:ok, modules} = :application.get_key(:macaw_host, :modules)
 
+    for module <- modules,
+        {:docs_v1, _, _, _, moduledoc, _, entries} = Code.fetch_docs(module),
+        doc <- [moduledoc | for({_, _, _, doc, _} <- entries, do: doc)],
+        %{"en" => text} <- [doc],
+        [ref, mod, fun, arity] <- Regex.scan(@ref, text),
+        do: {module, ref, Module.concat([mod]), fun, String.to_integer(arity)}
+  end
+
+  @tag verifies: "doc-refs"
+  test "every Module.fun/arity a doc names exists" do
     missing =
-      for module <- modules,
-          {:docs_v1, _, _, _, moduledoc, _, entries} = Code.fetch_docs(module),
-          doc <- [moduledoc | for({_, _, _, doc, _} <- entries, do: doc)],
-          %{"en" => text} <- [doc],
-          [ref, mod, fun, arity] <- Regex.scan(@ref, text),
-          not exists?(Module.concat([mod]), fun, String.to_integer(arity)),
+      for {module, ref, mod, fun, arity} <- refs(),
+          not exists?(mod, fun, arity),
           do: "#{inspect(module)}: #{ref}"
 
     assert missing == []
+  end
+
+  @tag verifies: "host-docs"
+  test "the references checked are macaw_host's own and the generated script's alike" do
+    named = for {_, _, mod, _, _} <- refs(), uniq: true, do: hd(Module.split(mod))
+    assert "Macaw" in named
+    assert "Ctl" in named
+
+    # A function the generated script doesn't have is caught like one of macaw_host's.
+    refute exists?(Ctl.Secret, "mask", 2)
+    refute exists?(Macaw.Host.Config, "show", 2)
+    assert exists?(Ctl.Secret, "mask", 1)
   end
 
   defp exists?(module, fun, arity) do

@@ -43,6 +43,10 @@ the generated script's AST holds no try node, and no line starts with rescue
 a description without settings, seeds or migrate_keys and no app commands gives a script whose help runs with exit 0, no warning, and no "own commands" section
 ```
 
+```test:gen-no-app-commands
+generate/2 with nil app commands gives a script that parses, whose Ctl.AppCommands has commands/0 [] and answers run("frob", env, []) with {:error, "unknown command: frob"}
+```
+
 ### 2.1 The generated head {#host-gen-head}
 
 The script starts `#!/usr/bin/env elixir`, then a comment saying it is generated and must not be edited by hand, then the **version guard**, before any module: on an Elixir older than 1.18, or without its `JSON` module, it prints one clear sentence on stderr (`"<app>-ctl needs Elixir 1.18 or newer (for its JSON module); this is Elixir X."` and where to install one) and halts with status 1. **`Ctl.Home` is the first module,** holding the one `@data_dir` line ([07 §2](07-ctl-script.md#host-script-home)).
@@ -140,6 +144,10 @@ the generated script carries the description: Ctl.App.prefix/0 "SAMPLE", ids/0 {
 
 `Macaw.Host.Ctl.generate/2` and `build/2` take a map that already holds `:script` and `:ids` as checked, and check anything else with `new/2`; `generate/2` raises naming the fault (`":ctl is missing :port"`).
 
+```test:gen-generate-raises
+generate/2 of the sample description without :port raises ArgumentError with exactly ":ctl is missing :port"
+```
+
 ## 4. The Ctl.AppCommands contract {#host-gen-app-commands}
 
 The app's file holds one module, `Ctl.AppCommands`, **and nothing beside it:** a module of its own is nested inside it (`defmodule Helpers` within `Ctl.AppCommands`), and code outside it, which would run every time the script loads, is refused. The module has:
@@ -150,6 +158,10 @@ The app's file holds one module, `Ctl.AppCommands`, **and nothing beside it:** a
 **A name the script already has** (`start`, `config` …) **is never dispatched to it:** the common commands come first.
 
 It builds its docker command lines with `Ctl.Docker` (`exec_args/3`, `rpc_args/2`, `eval_args/3`, `release_args/4`), runs them with `Ctl.Commands.stream/1` or `interactive/1`, checks the container with `Ctl.Commands.ensure_running/1` or `ensure_ready/1`, and reads what it manages from `Ctl.App`. **A secret goes to the container by name,** through `eval_args/3` or `release_args/4`, never on a command line.
+
+```test:gen-app-commands-secret
+the sample's reset-password alice, the password answered at prompt_secret, runs one eval container whose argv is exactly the eval argv of 07 §6 with -e SAMPLE_CTL_ARGS -e SAMPLE_CTL_PASSWORD and Sample.Release.reset_password(), no element of it holding the password, with env [{"SAMPLE_CTL_ARGS", "[\"alice\"]"}, {"SAMPLE_CTL_PASSWORD", <the password>}]
+```
 
 `Macaw.Host.Ctl.app_commands/1` checks the file's source, so it can neither replace a generic module nor carry a second `@data_dir`:
 - it must parse (`"Ctl.AppCommands does not parse: line N: …"`);
@@ -174,7 +186,7 @@ the sample commands plus a defmodule Ctl.Home give "may define only Ctl.AppComma
 
 ## 5. Comparing for --check {#host-gen-compare}
 
-`Macaw.Host.Ctl.compare/2` is `:ok` when the committed text is exactly the generated text, else `{:error, message}` naming the first line that differs: `"the committed script differs from what the generator makes, first at line N:"`, then `generated:` and `committed:`, each line `inspect`ed, or `(end of file)` where one text has ended.
+`Macaw.Host.Ctl.compare/2` is `:ok` when the committed text is exactly the generated text, else `{:error, message}` naming the first line that differs: `"the committed script differs from what the generator makes, first at line N:"`, then `generated:` and `committed:`, each line `inspect`ed, or `(end of file)` where one text has ended (the newline ending a text's last line starts no line of its own). When every line agrees and only the final newline differs, it names the last line, the side without the newline marked `(no newline at the end of the file)`.
 
 ```test:gen-compare
 the same text is :ok; one changed line is named with its number and both versions; a file truncated after line 1 differs "first at line 2:"

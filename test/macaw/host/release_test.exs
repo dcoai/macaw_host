@@ -12,6 +12,7 @@ defmodule Macaw.Host.ReleaseTest do
   ]
 
   describe "config commands" do
+    @tag verifies: "release-config-cycle"
     test "set, get, list and unset, with the source of each value", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")
 
@@ -31,6 +32,7 @@ defmodule Macaw.Host.ReleaseTest do
                Release.config_command(path, @specs, "RT", ["get", "port"])
     end
 
+    @tag verifies: "release-config-secret"
     test "a secret is never shown", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")
 
@@ -44,6 +46,7 @@ defmodule Macaw.Host.ReleaseTest do
                Release.config_command(path, @specs, "RT", ["get", "smtp_password"])
     end
 
+    @tag verifies: "release-config-string-key"
     test "a file key written as a string is the file's value, not the default", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")
       File.write!(path, ~s(%{"port" => 9090}))
@@ -52,6 +55,7 @@ defmodule Macaw.Host.ReleaseTest do
                Release.config_command(path, @specs, "RT", ["get", "port"])
     end
 
+    @tag verifies: "release-config-env-typed"
     test "an env value is shown typed, as load! would read it, or as a fault", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")
 
@@ -71,6 +75,7 @@ defmodule Macaw.Host.ReleaseTest do
       assert %{name: :smtp_password, value: "unset", source: "default"} in list
     end
 
+    @tag verifies: "release-config-errors"
     test "bad input is an answer, not a crash", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")
 
@@ -84,6 +89,12 @@ defmodule Macaw.Host.ReleaseTest do
     end
   end
 
+  @tag verifies: "release-status"
+  test "status emits the report as one JSON line" do
+    out = ExUnit.CaptureIO.capture_io(fn -> Release.status(%{healthy: true}) end)
+    assert out == ~s({"healthy":true}\n)
+  end
+
   describe "in a fresh VM, as bin/app eval runs it" do
     # Each runs `elixir` with only this library's and its deps' code paths,
     # the arguments in RT_CTL_ARGS, and nothing loaded that the test loaded:
@@ -94,6 +105,7 @@ defmodule Macaw.Host.ReleaseTest do
       System.cmd("elixir", args, env: env, stderr_to_stdout: true)
     end
 
+    @tag verifies: "release-eval-atoms"
     test "config set and get, with a typed name never loaded before", %{tmp_dir: dir} do
       code = """
       Application.put_env(:rt_app, :data_dir, #{inspect(dir)})
@@ -108,6 +120,7 @@ defmodule Macaw.Host.ReleaseTest do
       assert out =~ ~s("value":"42")
     end
 
+    @tag verifies: "release-bad-args"
     test "malformed arguments fail with one line on stderr and status 1", %{tmp_dir: dir} do
       code = """
       Application.put_env(:rt_app, :data_dir, #{inspect(dir)})
@@ -121,6 +134,7 @@ defmodule Macaw.Host.ReleaseTest do
                eval(code, [{"RT_CTL_ARGS", "[1, 2]"}])
     end
 
+    @tag verifies: "release-config-broken"
     test "a broken config.exs fails with one line on stderr and status 1", %{tmp_dir: dir} do
       File.write!(Path.join(dir, "config.exs"), "%{\n  port: x,\n  mode: @doc\n}\n")
 
@@ -138,10 +152,160 @@ defmodule Macaw.Host.ReleaseTest do
       end
     end
 
+    @tag verifies: "release-migrate-no-repos"
     test "migrate without a repo configured fails loudly, not silently", %{tmp_dir: _dir} do
       {out, status} = eval("Macaw.Host.Release.migrate(:rt_app_without_repos)", [])
       assert status != 0
       assert out =~ "ecto_repos"
     end
+
+    # Only the VM's stderr: its stdout is dropped.
+    defp stderr_of(code) do
+      paths = Path.wildcard(Path.join(Mix.Project.build_path(), "lib/*/ebin"))
+      args = Enum.flat_map(paths, &["-pa", &1]) ++ ["-e", code]
+      System.cmd("sh", ["-c", ~s(elixir "$@" 2>&1 >/dev/null), "sh" | args])
+    end
+
+    @tag verifies: "host-release-protocol"
+    test "arguments arrive as JSON in an env var, answers leave as JSON lines, a missing variable fails",
+         %{tmp_dir: dir} do
+      prefix = "RTP#{System.unique_integer([:positive])}"
+      System.put_env(prefix <> "_CTL_ARGS", ~s(["get", "port"]))
+      System.put_env(prefix <> "_CTL_PASSWORD", "correct-horse")
+
+      on_exit(fn ->
+        System.delete_env(prefix <> "_CTL_ARGS")
+        System.delete_env(prefix <> "_CTL_PASSWORD")
+      end)
+
+      assert Release.ctl_args!(prefix) == ["get", "port"]
+      assert Release.ctl_password(prefix) == "correct-horse"
+      assert Release.ctl_password(prefix <> "_NONE") == nil
+
+      assert ExUnit.CaptureIO.capture_io(fn -> Release.emit(%{ok: true, set: "port"}) end) ==
+               ~s({"ok":true,"set":"port"}\n)
+
+      code = """
+      Application.put_env(:rt_app, :data_dir, #{inspect(dir)})
+      Macaw.Host.Release.config(:rt_app, [], "RT")
+      """
+
+      assert {"RT_CTL_ARGS must be a JSON array of strings\n", 1} = stderr_of(code)
+      assert {"RT_CTL_ARGS must be a JSON array of strings\n", 1} = eval(code, [])
+
+      assert {"RT_CTL_ARGS must be a JSON array of strings\n", 1} =
+               eval(code, [{"RT_CTL_ARGS", ~s({"a": 1})}])
+    end
+
+    @tag verifies: "host-release-fail"
+    test "fail/1 prints its message as one line on stderr and halts with status 1" do
+      assert {"it broke\n", 1} =
+               stderr_of(~s|Macaw.Host.Release.fail("it broke"); IO.puts("never")|)
+
+      assert {"it broke\n", 1} =
+               eval(~s|Macaw.Host.Release.fail("it broke"); IO.puts("never")|, [])
+    end
+
+    @tag verifies: "host-release-migrate"
+    test "migrate needs ecto_sql, and an app without :ecto_repos fails loudly" do
+      # The code paths of a release without ecto_sql (or ecto).
+      paths =
+        Path.join(Mix.Project.build_path(), "lib/*/ebin")
+        |> Path.wildcard()
+        |> Enum.reject(&(&1 =~ ~r{/lib/ecto(_sql)?/}))
+
+      args = Enum.flat_map(paths, &["-pa", &1]) ++ ["-e", "Macaw.Host.Release.migrate(:rt_app)"]
+
+      assert {"migrate needs ecto_sql, which rt_app does not depend on\n", 1} =
+               System.cmd("elixir", args, stderr_to_stdout: true)
+
+      {out, status} = eval("Macaw.Host.Release.migrate(:rt_app_without_repos)", [])
+      assert status != 0
+      assert out =~ "ecto_repos"
+    end
+
+    @tag verifies: "host-release-config"
+    test "config/3 answers from the app's data directory; config_command/5 shows each setting as the app loads it",
+         %{tmp_dir: dir} do
+      code = """
+      Application.put_env(:rt_app, :data_dir, #{inspect(dir)})
+      specs = [{:port, :port, 4000}, {:mode, {:enum, [:open, :closed]}, :closed}]
+      Macaw.Host.Release.config(:rt_app, specs, "RT")
+      """
+
+      File.write!(Path.join(dir, "config.exs"), "%{port: 8443}")
+      assert {out, 0} = eval(code, [{"RT_CTL_ARGS", ~s(["list"])}])
+
+      assert Enum.map(String.split(out, "\n", trim: true), &JSON.decode!/1) == [
+               %{"name" => "port", "value" => "8443", "source" => "config.exs"},
+               %{"name" => "mode", "value" => ":closed", "source" => "default"}
+             ]
+
+      path = Path.join(dir, "config.exs")
+      specs = [{:tz, :string, "Etc/UTC"} | @specs]
+
+      # A string value is typed with its quotes; an env var set empty is the source.
+      assert {:ok, [%{ok: true, set: "tz", restart: "restart to apply"}]} =
+               Release.config_command(path, specs, "RT", ["set", "tz", ~s("Europe/Oslo")], %{})
+
+      assert {:error, _} =
+               Release.config_command(path, specs, "RT", ["set", "tz", "Europe/Oslo"], %{})
+
+      assert {:ok, list} = Release.config_command(path, specs, "RT", ["list"], %{"RT_TZ" => ""})
+      assert Enum.map(list, & &1.name) == [:tz, :port, :mode, :smtp_password]
+      assert %{name: :tz, value: ~s(""), source: "env RT_TZ"} in list
+      assert %{name: :port, value: "8443", source: "config.exs"} in list
+
+      assert {:ok, [%{ok: true, unset: "tz", restart: "restart to apply"}]} =
+               Release.config_command(path, specs, "RT", ["unset", "tz"], %{})
+
+      assert {:error, "usage: config list | get NAME | set NAME VALUE | unset NAME"} =
+               Release.config_command(path, specs, "RT", ["get"], %{})
+
+      File.write!(path, "%{\n  port: x\n}")
+
+      assert {:error, message} = Release.config_command(path, specs, "RT", ["list"], %{})
+      assert message == "#{path}:2: not a literal: x"
+    end
+  end
+
+  @tag verifies: "host-release-status"
+  test "status/1 emits the app's own health report, with its version and build, as one JSON line",
+       %{tmp_dir: dir} do
+    report =
+      Macaw.Host.Health.report([data_dir: fn -> Macaw.Host.Health.writable(dir) end],
+        version: "1.2.0",
+        build: "abc"
+      )
+
+    out = ExUnit.CaptureIO.capture_io(fn -> Release.status(report) end)
+    assert [line] = String.split(out, "\n", trim: true)
+
+    assert JSON.decode!(line) == %{
+             "healthy" => true,
+             "version" => "1.2.0",
+             "build" => "abc",
+             "checks" => %{"data_dir" => "ok"}
+           }
+  end
+
+  @tag verifies: "host-release"
+  test "an app's release module delegates to it, and the script calls its config and status by name",
+       %{tmp_dir: dir} do
+    defmodule RtSample.Release do
+      def config, do: Macaw.Host.Release.config(:rt_sample, [], "RT")
+      def status, do: Macaw.Host.Release.status(%{healthy: true})
+    end
+
+    assert ExUnit.CaptureIO.capture_io(fn -> RtSample.Release.status() end) ==
+             ~s({"healthy":true}\n)
+
+    # The generated sample script names Sample.Release's two functions.
+    {script, _home} = Macaw.Host.Ctl.Recorder.home!(dir, "sample-ctl")
+    {:ok, env} = Ctl.Env.load(script, %{})
+
+    assert {argv, _opts} = Ctl.Docker.config_args(env, ["list"])
+    assert List.last(argv) == "Sample.Release.config()"
+    assert List.last(Ctl.Docker.status_args("sample")) == "Sample.Release.status()"
   end
 end

@@ -1,4 +1,4 @@
-ExUnit.start()
+ExUnit.start(formatters: [ExUnit.CLIFormatter, Surfex.ExUnitFormatter])
 
 defmodule CtlFixture do
   @moduledoc """

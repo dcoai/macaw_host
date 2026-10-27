@@ -2,6 +2,8 @@
 
 ## 1. What macaw_host holds {#host-holds}
 
+<!-- surfex: class orientation -->
+
 Every deployable project carried the same host-side code, implemented by hand, and the copies had drifted, security fixes included: seven literal-config readers, eight `secret_key_base` generators, seven release modules, four health endpoints, five build-info copies and nine control scripts in three generations (macaw_compose#33). `macaw_host` implements them once:
 - **configuration:** the literal `config.exs` on the data volume, parsed and never evaluated, settings resolved env var > file > default ([01](01-config.md));
 - **secrets** the system generates itself, kept 0600 in the data directory ([02](02-secrets.md));
@@ -12,11 +14,17 @@ Every deployable project carried the same host-side code, implemented by hand, a
 
 Backups of the data directory and database were part of the proposal and left this release: two adopters on two database stacks, filed later as Research (macaw_compose#33, owner decision).
 
+`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-packaging)). It is released by git tag (v0.1.2: `compare/2` marks the end of either text and no longer crashes on a missing final newline, macaw_compose#65; v0.1.1: the fixes of macaw_compose#70, each with a test of its failing path).
+
 ## 2. The deployable-containers pattern {#host-pattern}
+
+<!-- surfex: class orientation -->
 
 A deployable app ships a container image and a host-side control script, `<app>-ctl`, and every such app is run the same way. `macaw_host` is the pattern's implementation: the library half runs inside the app's release (01–05), and the generator emits the host half (06–08).
 
 ### 2.1 The data directory {#host-data-dir}
+
+<!-- surfex: class orientation -->
 
 Everything a host holds for an app lives in one data directory:
 
@@ -35,6 +43,8 @@ Everything a host holds for an app lives in one data directory:
 
 ### 2.2 Who does what {#host-split}
 
+<!-- surfex: class orientation -->
+
 - The **app** declares its settings and loads them at boot with `Macaw.Host.Config`, generates its secrets with `Macaw.Host.Secrets`, delegates its release module's `config/0` and `status/0` to `Macaw.Host.Release`, builds its health report with `Macaw.Host.Health`, and stamps its build with `Macaw.Host.Build`.
 - The **script** runs the container, edits the host settings itself, and asks the app (in a throwaway container, or the running one) for everything about app config and health, through `Macaw.Host.Release`'s protocol ([03 §1](03-release.md#host-release-protocol)).
 - What an adopting app's image and CI must provide is in [08 §10](08-ctl-commands.md#host-cmd-adopter).
@@ -43,7 +53,14 @@ Everything a host holds for an app lives in one data directory:
 
 - **Runtime:** OTP and Elixir's standard library only (`:logger`, `:crypto`, `:eex`). `JSON` is Elixir's own, so **Elixir 1.18 or newer** is required, and nothing adds a JSON library.
 - **Optional:** `plug` (for `Macaw.Host.Health.Plug`, compiled only when Plug is present) and `ecto_sql` (for `Macaw.Host.Release.migrate/1`, `Macaw.Host.Health.database/1` and `Macaw.Host.Health.migrations/1`, which need it at call time) (macaw_compose#33, owner decision).
-- **Test only:** `stream_data`.
+- **Development and test only:** `surfex`, which keeps the spec, tests and code aligned (macaw_compose spec/00 §4.1).
+- **Test only:** `stream_data`, and `ecto_sqlite3` for the database checks (`Macaw.Host.Health.database/1`, `Macaw.Host.Health.migrations/1` and `Macaw.Host.Release.migrate/1` run against a real SQLite repo).
 - **The application** starts one process, a `Task.Supervisor` named `Macaw.Host.Health.Tasks`, under which health checks run ([04 §2](04-health.md#host-health-isolation)).
 
-`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-packaging)). It is released by git tag (v0.1.1: the fixes of macaw_compose#70, each with a test of its failing path).
+## 4. Documentation {#host-docs}
+
+**Every function `macaw_host`'s documentation names as `Module.fun/arity` exists,** whether it is `macaw_host`'s own or the generated script's (`Ctl.…`), so a doc never points a reader at a function that isn't there (`Config.show/2`, when it is `show/1`).
+
+```test:doc-refs
+every Module.fun/arity named in a moduledoc or a function's doc of the macaw_host application exists, as a function or a macro
+```

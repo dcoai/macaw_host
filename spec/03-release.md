@@ -41,7 +41,9 @@ in a fresh VM, RT_CTL_ARGS "not json" and "[1, 2]" each give exactly "RT_CTL_ARG
 
 ## 2. Migrating {#host-release-migrate}
 
+<!-- surfex: release-migrate-runs -->
 `Macaw.Host.Release.migrate/1` runs every migration of each of the app's repos (its `:ecto_repos`), up, starting only what migrating needs (`Ecto.Migrator.with_repo/2`), then emits `{"ok": true, "migrated": true}`.
+
 - It **requires `ecto_sql`;** without it, it fails with `"migrate needs ecto_sql, which <app> does not depend on"`.
 - An app without `:ecto_repos` configured fails loudly (raising, naming `ecto_repos`), never silently.
 

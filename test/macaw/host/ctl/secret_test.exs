@@ -23,6 +23,7 @@ defmodule Macaw.Host.Ctl.SecretTest do
     String.duplicate("é", 12) <> "wxyz"
   ]
 
+  @tag verifies: "mask-agree"
   test "the app and the script mask every value alike" do
     for value <- @values do
       assert Config.mask(:secret, value) == Ctl.Secret.mask(value),
@@ -30,6 +31,7 @@ defmodule Macaw.Host.Ctl.SecretTest do
     end
   end
 
+  @tag verifies: "script-secret-mask"
   test "the last four show only from 16 characters; unset is unset" do
     shown = Map.new(@values, &{&1, Ctl.Secret.mask(&1)})
 

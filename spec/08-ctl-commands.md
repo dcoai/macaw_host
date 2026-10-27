@@ -211,6 +211,8 @@ shell's last call is {"docker", ["exec", "-it", "sample", "/bin/sh"], [tty: true
 
 ## 10. What an adopting app provides {#host-cmd-adopter}
 
+<!-- surfex: class adopter-rule -->
+
 The generated script assumes these of the app, its image and its CI; `macaw_host` doesn't enforce them, and each app's own spec and pipeline hold them (the deployable-containers pattern):
 - **The script ships inside the image:** copied to `/app/<app>-ctl`, with a `bin/ctl` that prints it. **The image has no ENTRYPOINT** (an inherited one cleared with `ENTRYPOINT []`), so `docker run --rm IMAGE bin/ctl > <app>-ctl` extracts the copy that matches the image, and `eval_args/3` can run the release.
 - **The image's runtime user has the fixed uid and gid** the description's `:uid` names.

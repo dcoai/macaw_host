@@ -1,5 +1,7 @@
 # macaw_host
 
+> **This software is a very early release, and not ready for general use.**
+
 Public home: [github.com/dcoai/macaw_host](https://github.com/dcoai/macaw_host) · Docs: [hexdocs.pm](https://hexdocs.pm/macaw_host)
 
 Host glue for deployable Phoenix apps, implemented once for the Macaw family's host applications (dco-tek/macaw_compose#33). It is the "deployable containers" pattern's application side: everything a host holds lives in one data directory, app configuration is a literal map on it, and secrets the system can generate are generated there.
@@ -20,5 +22,5 @@ Part of [Macaw](https://github.com/dcoai/macaw) (spec/00 §4, host libraries). R
 From Hex:
 
 ```elixir
-{:macaw_host, "~> 0.1.3"}
+{:macaw_host, "~> 0.1.4"}
 ```

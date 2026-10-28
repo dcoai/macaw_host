@@ -1,5 +1,9 @@
 # Changelog
 
+## v0.1.4 (2026-10-28)
+
+- The README opens with the early-release notice (macaw#174).
+
 ## v0.1.3 (2026-10-28)
 
 - Spec and README links to the public home, `github.com/dcoai/macaw_host`, and the install snippet from Hex (macaw#171, #173).

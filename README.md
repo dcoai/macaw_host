@@ -24,5 +24,5 @@ Part of [Macaw](https://github.com/dcoai/macaw) (spec/00 §4, host libraries). R
 From Hex:
 
 ```elixir
-{:macaw_host, "~> 0.1.4"}
+{:macaw_host, "~> 0.1.5"}
 ```

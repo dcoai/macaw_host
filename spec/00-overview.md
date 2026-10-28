@@ -14,7 +14,7 @@ Every deployable project carried the same host-side code, implemented by hand, a
 
 Backups of the data directory and database were part of the proposal and left this release: two adopters on two database stacks, filed later as Research (macaw_compose#33, owner decision).
 
-`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-packaging)). It is released by git tag (v0.1.2: `compare/2` marks the end of either text and no longer crashes on a missing final newline, macaw_compose#65; v0.1.1: the fixes of macaw_compose#70, each with a test of its failing path).
+`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://github.com/dcoai/macaw/blob/main/spec/00-overview.md#overview-packaging)). It is released by git tag (v0.1.2: `compare/2` marks the end of either text and no longer crashes on a missing final newline, macaw_compose#65; v0.1.1: the fixes of macaw_compose#70, each with a test of its failing path).
 
 ## 2. The deployable-containers pattern {#host-pattern}
 

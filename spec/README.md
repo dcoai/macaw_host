@@ -1,6 +1,6 @@
 # macaw_host specification
 
-`macaw_host` is the host-side glue every deployable Macaw-family application needs, implemented once: the literal `config.exs` on the data volume, generated secrets, the release entry points the control script calls, health, build info, and the generator of the `<app>-ctl` control script itself. Each Macaw component has its own spec in its own repository (dco-tek/macaw_compose#61); this is `macaw_host`'s. The family's overview, and where the host libraries sit in it, is in [macaw_compose 00 §4](https://gitlab.conet.yarina.org/dco-tek/macaw_compose/-/blob/main/spec/00-overview.md#overview-packaging).
+`macaw_host` is the host-side glue every deployable Macaw-family application needs, implemented once: the literal `config.exs` on the data volume, generated secrets, the release entry points the control script calls, health, build info, and the generator of the `<app>-ctl` control script itself. Each Macaw component has its own spec in its own repository (dco-tek/macaw_compose#61); this is `macaw_host`'s. The family's overview, and where the host libraries sit in it, is in [macaw_compose 00 §4](https://github.com/dcoai/macaw/blob/main/spec/00-overview.md#overview-packaging).
 
 | File | Covers | Status |
 |---|---|---|

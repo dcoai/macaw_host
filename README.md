@@ -1,5 +1,7 @@
 # macaw_host
 
+Public home: [github.com/dcoai/macaw_host](https://github.com/dcoai/macaw_host) · Docs: [hexdocs.pm](https://hexdocs.pm/macaw_host)
+
 Host glue for deployable Phoenix apps, implemented once for the Macaw family's host applications (dco-tek/macaw_compose#33). It is the "deployable containers" pattern's application side: everything a host holds lives in one data directory, app configuration is a literal map on it, and secrets the system can generate are generated there.
 
 | Module | What it does |
@@ -13,4 +15,4 @@ Host glue for deployable Phoenix apps, implemented once for the Macaw family's h
 | `Macaw.Host.Ctl` | generates the app's `<app>-ctl` from the generic modules in `priv/ctl/`, the `:ctl` description in its `mix.exs` (`Macaw.Host.Ctl.Description`) and its own `Ctl.AppCommands`; `mix macaw.host.ctl` writes it, `--check` fails CI when the committed script differs |
 | `Macaw.Host.Ctl.Recorder` | the stand-in for a generated script's `Ctl.World`, so an app's tests assert every command's exact docker argv without docker |
 
-Part of [Macaw](https://gitlab.conet.yarina.org/dco-tek/macaw_compose) (spec/00 §4, host libraries). Released by git tag.
+Part of [Macaw](https://github.com/dcoai/macaw) (spec/00 §4, host libraries). Released by git tag.

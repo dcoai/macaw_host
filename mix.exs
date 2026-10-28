@@ -30,7 +30,7 @@ defmodule Macaw.Host.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
-  # Published on Hex from its public home, mirrored from GitLab (dco-tek/macaw_compose#155).
+  # Published on Hex from its public home, mirrored from GitLab (dco-tek/macaw/macaw_compose#155).
   defp package do
     [
       licenses: ["MIT"],

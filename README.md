@@ -16,3 +16,9 @@ Host glue for deployable Phoenix apps, implemented once for the Macaw family's h
 | `Macaw.Host.Ctl.Recorder` | the stand-in for a generated script's `Ctl.World`, so an app's tests assert every command's exact docker argv without docker |
 
 Part of [Macaw](https://github.com/dcoai/macaw) (spec/00 §4, host libraries). Released by git tag.
+
+From Hex:
+
+```elixir
+{:macaw_host, "~> 0.1.3"}
+```

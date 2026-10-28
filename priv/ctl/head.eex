@@ -104,6 +104,18 @@ defmodule Ctl.App do
   the default being nil, `:hostname`, `:timezone` or a string.
   """
   def migrate_keys, do: <%= inspect(@migrate_keys, limit: :infinity, printable_limit: :infinity) %>
+
+  @doc """
+  Whether NETWORK may be `host`. `false` keeps the app's listeners off the
+  host's interfaces (a console bound inside the container, say).
+  """
+  def host_network?, do: <%= inspect(@host_network) %>
+
+  @doc """
+  Names that are <%= @title %>'s own configuration, not host settings:
+  `{"KEY", "config key"}`, refused by `env set`.
+  """
+  def app_keys, do: <%= inspect(@app_keys, limit: :infinity, printable_limit: :infinity) %>
 end
 
 # Structure: `Ctl.App` is what the script manages; `Ctl.Script` reads and

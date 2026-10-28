@@ -101,6 +101,8 @@ ctl: [
 | `:seeds` | `[]` | app config `init` seeds: `[tz: :timezone, phx_host: :hostname, phx_scheme: "http"]`, each a lower-case config key and `:hostname`, `:timezone` or a literal (a string, integer or atom) |
 | `:migrate_keys` | `[]` | `{"OLD_KEY", "config_key", old default}` that `init --migrate` carries from `<name>-env`, the old default `nil`, `:hostname`, `:timezone` or a string |
 | `:settings` | `[]` | the app's own host settings, `{"KEY", "default", "help"}`, the key upper-case and not one of the six every script has |
+| `:host_network` | `true` | `false` refuses `NETWORK=host` ([07 §5.4](07-ctl-script.md#host-script-env-validate)), for an app whose listeners must stay off the host's interfaces (a console bound inside the container) |
+| `:app_keys` | `[]` | `{"KEY", "config_key"}`: a name that is the app's own configuration, which `env set` refuses with a pointer to `config set` ([08 §3](08-ctl-commands.md#host-cmd-env)); KEY upper-case, never a host setting |
 | `:app_commands` | `"ctl/app_commands.ex"` | the file defining `Ctl.AppCommands`, or `false` for none |
 | `:output` | `"container/<name>-ctl"` | where the script is written |
 
@@ -111,7 +113,8 @@ Checked in this order, the first fault answered:
 - **any key it doesn't know:** `":ctl has unknown keys: :prot"`. A misspelled optional key silently taking its default is the bug this refuses;
 - **every missing required key,** named together: `":ctl is missing :release, :uid"`;
 - **a value of the wrong shape:** `":ctl :uid must be \"uid:gid\", both numbers, not \"app\""`, and likewise for each key of §3.1 and §3.2;
-- **a setting that redefines one of the six:** `":ctl :settings cannot redefine PORT, which every script has"`; a setting key that isn't upper-case, or an entry that isn't `{"KEY", "default", "help"}`, is named too.
+- **a setting that redefines one of the six:** `":ctl :settings cannot redefine PORT, which every script has"`; a setting key that isn't upper-case, or an entry that isn't `{"KEY", "default", "help"}`, is named too;
+- **an app key that names a host setting:** `":ctl :app_keys names ADMIN_PORT, which is a host setting"` (`env set` would refuse the setting it edits).
 
 ```test:gen-description-faults
 missing :release and :uid gives ":ctl is missing :release, :uid"; an extra prot: 1 gives ":ctl has unknown keys: :prot"; uid "app" gives the message above; a PORT setting gives the redefine message; nil gives the no-:ctl message
@@ -134,6 +137,10 @@ Beside the filled-in keys, the checked description holds:
 | `NAME` | the `:name` | |
 | `DOCKER_RUN_ARGS` | the `:docker_run_args` | extra arguments for `docker run` |
 
+```test:gen-description-app-keys
+host_network "no" gives ":ctl :host_network must be true or false, not \"no\""; app_keys [{"smtp", "smtp_host"}] the shape message; app_keys naming ADMIN_PORT "names ADMIN_PORT, which is a host setting"; the sample's description has host_network true and its app key
+```
+
 ```test:gen-defaults
 new/2 of the sample description without settings, with otp_app :sample_web: title "Sample", release_bin "/app/bin/sample_web", tag "latest", network "bridge", data_home "/srv/sample", app_commands "ctl/app_commands.ex", output "container/sample-ctl", script "sample-ctl", ids {2060, 2060}, and the settings' keys PORT NETWORK IMAGE TAG NAME DOCKER_RUN_ARGS
 ```
@@ -154,6 +161,11 @@ The app's file holds one module, `Ctl.AppCommands`, **and nothing beside it:** a
 - **`commands/0`:** `[{name, usage, help}]`, the app's commands. `name` is what is typed (`"asterisk"`), `usage` how `help` shows it (`"asterisk [CLI COMMAND]"`), `help` one sentence. They are listed in `help` under the app's own heading.
 - **`run(name, env, args)`:** runs one, returning what the common commands do: `:ok`, `{:error, message}` (printed on stderr, exit 1) or `{:halt, status}`. **It is called only once the data directory is set** ([07 §8](07-ctl-script.md#host-script-main)).
 - **optionally `run_args(env)`:** extra `docker run` arguments (more ports, say), placed before DOCKER_RUN_ARGS ([07 §6](07-ctl-script.md#host-script-docker)).
+- **optionally `validate(env)`:** `:ok` or `{:error, message}`, the app's own checks of its host settings (a second port is a port, and not PORT), run after the common ones by `Ctl.Env.validate/1`, so on every `env set`, `start` and throwaway container ([07 §5.4](07-ctl-script.md#host-script-env-validate); macaw_host#1).
+- **optionally `seeds(env)`:** `[{config key, value}]`, app config `init` seeds that the app computes from this host's settings (a console URL from its bind and port), after the description's `:seeds` and by the same rule ([08 §2.1](08-ctl-commands.md#host-cmd-seed)).
+- **optionally `status_lines(env)`:** lines `status` prints with the host's (its other ports, say), after `data:` ([08 §8](08-ctl-commands.md#host-cmd-status)).
+
+An optional function the app doesn't define is never called, and is called through `apply/3`, so its absence compiles without a warning.
 
 **A name the script already has** (`start`, `config` …) **is never dispatched to it:** the common commands come first.
 

@@ -130,7 +130,13 @@ setting PORT=9090 and ADMIN_PORT=9091 in "# mine\nPORT=8080\n" gives exactly "# 
 `Ctl.Env.validate/1` checks the values a command is about to use, before anything is written or run, and answers the first problem:
 - PORT a port number, 1–65535 (`"PORT must be a port number (1–65535), not …"`);
 - NAME a valid container name, letters, digits, `_`, `.` and `-` (`"NAME must be a valid container name (letters, digits, _ . -)"`);
-- NETWORK non-empty.
+- NETWORK non-empty;
+- **with `host_network: false`** ([06 §3.2](06-ctl-generator.md#host-gen-optional)), NETWORK not `host` (`"NETWORK=host is not allowed for <Title>: its listeners stay inside the container's own network"`): host networking would put every listener on the host's interfaces, a console meant for one address on all of them (macaw_host#1);
+- then **the app's own checks,** `Ctl.AppCommands.validate/1` when it defines one ([06 §4](06-ctl-generator.md#host-gen-app-commands)), its answer the answer.
+
+```test:script-env-host-network
+a script generated with host_network: false, run as a program, answers env set NETWORK=host with exit status 1 and the not-allowed message, and writes no settings file
+```
 
 ```test:script-env-validate
 env set PORT=70000 is refused with the PORT message and the file is unchanged; start with NAME "bad name" in the environment answers the NAME message and runs no docker command

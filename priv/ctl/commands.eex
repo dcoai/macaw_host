@@ -123,9 +123,17 @@ defmodule Ctl.Commands do
   # The seeds are this host's (its name, its zone); anything already set in
   # the app's configuration is left alone.
   defp seed_config(env) do
-    with :ok <- seed(env, Ctl.App.seeds()) do
+    with :ok <- seed(env, Ctl.App.seeds() ++ app_seeds(env)) do
       IO.puts("ready: ./#{@script} start")
     end
+  end
+
+  # Seeds the app computes from this host's settings (`Ctl.AppCommands.seeds/1`):
+  # after the description's, so the description's come first.
+  defp app_seeds(env) do
+    if function_exported?(Ctl.AppCommands, :seeds, 1),
+      do: apply(Ctl.AppCommands, :seeds, [env]),
+      else: []
   end
 
   # `Enum.empty?/1` rather than a clause for `[]`: the compiler knows the
@@ -703,11 +711,20 @@ defmodule Ctl.Commands do
       IO.puts("home:     #{env.data_dir}")
       IO.puts("settings: #{env.path}" <> if(env.loaded?, do: "", else: " (none yet — defaults)"))
       IO.puts("data:     #{Ctl.Env.data_path(env)}")
+      Enum.each(app_status_lines(env), &IO.puts/1)
 
       if state_of(record) == "running", do: print_app(name)
 
       :ok
     end
+  end
+
+  # The app's own host lines (`Ctl.AppCommands.status_lines/1`): its other
+  # ports, say.
+  defp app_status_lines(env) do
+    if function_exported?(Ctl.AppCommands, :status_lines, 1),
+      do: apply(Ctl.AppCommands, :status_lines, [env]),
+      else: []
   end
 
   defp state_of({:ok, %{"State" => %{"Running" => true}}}), do: "running"
@@ -761,6 +778,12 @@ defmodule Ctl.Commands do
         %{} = nested ->
           IO.puts("#{key}:")
           for {sub, v} <- Enum.sort(nested), do: IO.puts("  #{String.pad_trailing(sub <> ":", 16)}#{scalar(v)}")
+
+        [%{} | _] = list ->
+          IO.puts("#{key}:")
+
+          for %{} = item <- list,
+              do: IO.puts("  - " <> Enum.map_join(Enum.sort(item), ", ", fn {k, v} -> "#{k}: #{scalar(v)}" end))
 
         _ ->
           IO.puts(String.pad_trailing(key <> ":", 10) <> scalar(value))

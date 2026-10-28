@@ -25,7 +25,8 @@ defmodule CtlFixture do
       port: 4000,
       settings: [{"ADMIN_PORT", "4001", "The admin console's port."}],
       seeds: [phx_host: :hostname, phx_scheme: "http", tz: :timezone],
-      migrate_keys: [{"PHX_HOST", "phx_host", :hostname}, {"TZ", "tz", :timezone}]
+      migrate_keys: [{"PHX_HOST", "phx_host", :hostname}, {"TZ", "tz", :timezone}],
+      app_keys: [{"SMTP_HOST", "smtp_host"}]
     ]
   end
 

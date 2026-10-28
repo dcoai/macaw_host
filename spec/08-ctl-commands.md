@@ -35,10 +35,14 @@ init /elsewhere on a script that already names a directory is refused with the -
 
 ### 2.1 Seeding {#host-cmd-seed}
 
-**The seeds are this host's** (its name, its zone, `Ctl.App.seeds/0`), and **anything already set in the app's configuration is left alone.** With seeds, init makes the throwaway container ready (§1), asks the app for `config list`, and for each seed whose key is at its `default` source runs `config set KEY <value>`, the value resolved ([07 §5.5](07-ctl-script.md#host-script-env-host)) and written as a literal (a string quoted). A failed set stops it there. Seeded, or with no seeds at all, it prints `"ready: ./<app>-ctl start"`.
+**The seeds are this host's** (its name, its zone, `Ctl.App.seeds/0`, then what the app computes from this host's settings, `Ctl.AppCommands.seeds/1` when it defines one), and **anything already set in the app's configuration is left alone.** With seeds, init makes the throwaway container ready (§1), asks the app for `config list`, and for each seed whose key is at its `default` source runs `config set KEY <value>`, the value resolved ([07 §5.5](07-ctl-script.md#host-script-env-host)) and written as a literal (a string quoted). A failed set stops it there. Seeded, or with no seeds at all, it prints `"ready: ./<app>-ctl start"`.
 
 ```test:cmd-init-seed
 with phx_host and tz at their default and phx_scheme set in config.exs, init asks list, then sets phx_host to the host's name and tz to the host's zone, each by name in SAMPLE_CTL_ARGS, and leaves phx_scheme alone
+```
+
+```test:cmd-init-app-seeds
+with admin_url also at its default, init sets phx_host, tz and then admin_url to "http://localhost:4001", from the sample's seeds/1 and its ADMIN_PORT
 ```
 
 ### 2.2 Migrating an older setup {#host-cmd-migrate}
@@ -81,7 +85,7 @@ init --migrate with no sample-env beside the script answers "nothing to migrate:
 `./<app>-ctl env list | get KEY | set KEY=VALUE [KEY=VALUE…] | unset KEY` edits the host settings in place (`Ctl.Commands.env/2`); `--reveal` anywhere shows secrets. Any other shape answers the usage.
 - **`list`:** every known key, `KEY=value` and where the value came from (`environment`, `file` or `default`), then every key in the file this script doesn't know, flagged `(file, unknown to <app>-ctl)`, so a typo is visible rather than silently ignored. **Secrets are masked** unless `--reveal` ([07 §4](07-ctl-script.md#host-script-secret)).
 - **`get KEY`:** the value, masked likewise; a key neither known nor in the file is `"<KEY> is not set in <path>"`.
-- **`set KEY=VALUE…`:** each pair must be `KEY=VALUE` (`"expected KEY=VALUE, got …"`) with a valid name (`"<KEY> is not a valid setting name (letters, digits and _)"`). **A key that is now the app's own configuration is refused with a pointer to `config`** (`"<KEY> is <Title>'s own configuration now: ./<app>-ctl config set <config key> VALUE"`). A key this script doesn't know is accepted (the file is free-form) and flagged `(not a setting <app>-ctl knows)`. The known values are **validated before anything is written** ([07 §5.4](07-ctl-script.md#host-script-env-validate)); then each is set in the file's text ([07 §5.3](07-ctl-script.md#host-script-env-edit)), the file written 0600 (a file not there yet starts as `init` would write it), `set KEY` printed for each, and `"<path> updated — ./<app>-ctl restart to apply"`. **`set` never echoes a value.**
+- **`set KEY=VALUE…`:** each pair must be `KEY=VALUE` (`"expected KEY=VALUE, got …"`) with a valid name (`"<KEY> is not a valid setting name (letters, digits and _)"`). **A key that is the app's own configuration (one `init --migrate` carried over, or one of the description's `:app_keys`) is refused with a pointer to `config`** (`"<KEY> is <Title>'s own configuration now: ./<app>-ctl config set <config key> VALUE"`). A key this script doesn't know is accepted (the file is free-form) and flagged `(not a setting <app>-ctl knows)`. The known values are **validated before anything is written** ([07 §5.4](07-ctl-script.md#host-script-env-validate)); then each is set in the file's text ([07 §5.3](07-ctl-script.md#host-script-env-edit)), the file written 0600 (a file not there yet starts as `init` would write it), `set KEY` printed for each, and `"<path> updated — ./<app>-ctl restart to apply"`. **`set` never echoes a value.**
 - **`unset KEY`:** KEY must be a setting's name, an upper-case letter then upper-case letters, digits and `_` (`^[A-Z][A-Z0-9_]*$`), else `"<KEY, inspected> is not a valid setting name (A–Z, digits and _, starting with a letter)"` and the file untouched. It removes the key's active lines, **matched as written, never as a pattern** (the key is escaped; before macaw_compose#70 it was a regular expression, and `env unset '.*'` removed every line); when there were none, `"<KEY> is not set in <path>; nothing to do"`; else `unset KEY` and the restart line.
 
 ```test:cmd-env-list
@@ -90,6 +94,10 @@ with PORT=8080 and REGISTRY_TOKEN=abcdefghijkl1234 in sample.conf: list shows "P
 
 ```test:cmd-env-set
 set PORT=9090 ADMIN_PORT=9091 over "# mine\nPORT=8080\n" leaves "# mine\nPORT=9090\nADMIN_PORT=9091\n" and says restart to apply; set PHX_HOST=x is refused with the pointer to config set phx_host
+```
+
+```test:cmd-env-app-validate
+with PORT=8080, env set ADMIN_PORT=99999 and ADMIN_PORT=8080 answer the sample validate/1's messages, SMTP_HOST=mail.example the own-configuration message from :app_keys, and the file is unchanged
 ```
 
 ```test:cmd-env-unset
@@ -200,13 +208,17 @@ an unchanged image and no container: "already on the newest <ref>", nothing writ
 `./<app>-ctl status` reports what is running (`Ctl.Commands.status/2`): the data directory, docker answering, then
 - `state:` running, docker's own status, stopped, or not created; for a container, its `image:` and `started:`;
 - `wanted:` IMAGE:TAG, `(present locally)` or `(not pulled)`;
-- `home:`, `settings:` (`(none yet — defaults)` when there is no `<app>.conf`), and `data:`;
-- **when it is running, the app's own report,** asked of the running app (`rpc <Release>.status()`, [03 §4](03-release.md#host-release-status)). The report is **the last JSON object** the call prints; anything before it (a warning from the node) is not the answer. `healthy` is shown as `health: healthy` or `UNHEALTHY`, every other key in sorted order, a nested map key by key. An app that doesn't answer is `app: not answering yet`.
+- `home:`, `settings:` (`(none yet — defaults)` when there is no `<app>.conf`), and `data:`, then the app's own host lines (`Ctl.AppCommands.status_lines/1`, when it defines one);
+- **when it is running, the app's own report,** asked of the running app (`rpc <Release>.status()`, [03 §4](03-release.md#host-release-status)). The report is **the last JSON object** the call prints; anything before it (a warning from the node) is not the answer. `healthy` is shown as `health: healthy` or `UNHEALTHY`, every other key in sorted order, a nested map key by key, **a list of maps one element a line** (`  - key: value, key: value`, keys sorted). An app that doesn't answer is `app: not answering yet`.
 
 `status` answers `:ok` whatever the app's health.
 
 ```test:cmd-status
 with a running container whose rpc prints "a warning" and then {"healthy":true,"version":"1.2.0","checks":{"database":"ok"}}: the last call is exec sample /app/bin/sample rpc Sample.Release.status(), and the output has "state:    running", "home:     <home>", "health:   healthy", "version:  1.2.0" and "checks:" with "  database:" "ok"
+```
+
+```test:cmd-status-app-lines
+status prints "admin:    port 4001" right after the data: line, and a report's untrusted_proxies list of two maps as "untrusted_proxies:" then "  - peer: 10.0.32.64, requests: 57" and "  - peer: 10.0.0.9, requests: 21"
 ```
 
 ## 9. logs and shell {#host-cmd-logs}

@@ -43,4 +43,25 @@ defmodule Ctl.AppCommands do
 
   @doc "The admin console's port, published beside the web port."
   def run_args(env), do: ["-p", "#{Ctl.Env.get(env, "ADMIN_PORT")}:4001"]
+
+  @doc "ADMIN_PORT is a port, and not PORT."
+  def validate(env) do
+    admin = Ctl.Env.get(env, "ADMIN_PORT")
+
+    case Integer.parse(admin) do
+      {n, ""} when n in 1..65_535 ->
+        if admin == Ctl.Env.get(env, "PORT"),
+          do: {:error, "ADMIN_PORT must differ from PORT (both #{admin})"},
+          else: :ok
+
+      _ ->
+        {:error, "ADMIN_PORT must be a port number (1–65535), not #{inspect(admin)}"}
+    end
+  end
+
+  @doc "The admin console's URL, from this host's ADMIN_PORT."
+  def seeds(env), do: [admin_url: "http://localhost:#{Ctl.Env.get(env, "ADMIN_PORT")}"]
+
+  @doc "The admin console's port, on status's host lines."
+  def status_lines(env), do: ["admin:    port #{Ctl.Env.get(env, "ADMIN_PORT")}"]
 end

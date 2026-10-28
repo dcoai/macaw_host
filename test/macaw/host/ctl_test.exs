@@ -80,6 +80,32 @@ defmodule Macaw.Host.CtlTest do
   end
 
   describe "run as a program, in its own elixir process" do
+    @tag verifies: "script-env-host-network"
+    @tag :tmp_dir
+    test "host_network: false refuses NETWORK=host and writes nothing", %{tmp_dir: dir} do
+      home = Path.join(dir, "home")
+      File.mkdir_p!(home)
+      closed = Path.join(dir, "closed-ctl")
+
+      File.write!(
+        closed,
+        CtlFixture.description()
+        |> Keyword.put(:host_network, false)
+        |> Ctl.generate(CtlFixture.app_commands())
+        |> Elixir.Ctl.Script.put_data_dir(home)
+      )
+
+      assert {out, 1} =
+               System.cmd("elixir", [closed, "env", "set", "NETWORK=host"],
+                 stderr_to_stdout: true
+               )
+
+      assert out =~
+               "NETWORK=host is not allowed for Sample: its listeners stay inside the container's own network"
+
+      refute File.exists?(Path.join(home, "sample.conf"))
+    end
+
     @tag verifies: "script-help"
     test "help lists the common commands and the app's, and exits 0" do
       {out, status} = System.cmd("elixir", [CtlFixture.path(), "help"], stderr_to_stdout: true)
@@ -138,6 +164,24 @@ defmodule Macaw.Host.CtlTest do
       assert {:error,
               "mix.exs has no :ctl key in its project config (see Macaw.Host.Ctl.Description)"} =
                Description.new(nil)
+    end
+
+    @tag verifies: "gen-description-app-keys"
+    test "host_network is a boolean; :app_keys are {\"KEY\", \"config_key\"}, never a host setting" do
+      put = &Keyword.put(CtlFixture.description(), &1, &2)
+
+      assert {:error, ":ctl :host_network must be true or false, not \"no\""} =
+               Description.new(put.(:host_network, "no"))
+
+      assert {:error,
+              ":ctl :app_keys must be a list of {\"KEY\", \"config_key\"}, not [{\"smtp\", \"smtp_host\"}]"} =
+               Description.new(put.(:app_keys, [{"smtp", "smtp_host"}]))
+
+      assert {:error, ":ctl :app_keys names ADMIN_PORT, which is a host setting"} =
+               Description.new(put.(:app_keys, [{"ADMIN_PORT", "admin_port"}]))
+
+      assert {:ok, %{host_network: true, app_keys: [{"SMTP_HOST", "smtp_host"}]}} =
+               Description.new(CtlFixture.description())
     end
 
     @tag verifies: "gen-defaults"
@@ -216,13 +260,18 @@ defmodule Macaw.Host.CtlTest do
                 "line 1 is outside it: :ok"} =
                Ctl.app_commands(":ok\n" <> CtlFixture.app_commands())
 
-      # A submodule belongs inside the module, not beside it.
+      # A submodule belongs inside the module, not beside it: the line after
+      # the fixture's last and a blank one.
+      line = length(String.split(CtlFixture.app_commands(), "\n")) + 1
+
       assert {:error,
               "the app commands file may hold only the Ctl.AppCommands module; " <>
-                "line 48 is outside it: defmodule Ctl.AppCommands.Helpers" <> _} =
+                "line " <> rest} =
                Ctl.app_commands(
                  CtlFixture.app_commands() <> "\ndefmodule Ctl.AppCommands.Helpers do\nend\n"
                )
+
+      assert String.starts_with?(rest, "#{line} is outside it: defmodule Ctl.AppCommands.Helpers")
 
       nested =
         String.replace(

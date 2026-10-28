@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- App hooks in `Ctl.AppCommands`, each optional: `validate/1` (the app's own checks of its host settings, on every `env set`, `start` and throwaway container), `seeds/1` (app config `init` seeds from this host's settings) and `status_lines/1` (host lines in `status`). `status` prints a list of maps one element a line (#1, #5).
+- Description keys `host_network` (`false` refuses `NETWORK=host`) and `:app_keys` (names `env set` refuses as the app's own configuration) (#5).
 - **Fixed:** the generated script reaches the terminal by path (`/proc/<pid>/fd`), since a child of the BEAM has no `/dev/tty`: `shell` and other `tty: true` commands work again; `prompt_secret/1` turns echo off before asking and refuses without a terminal (#1, #4; collpa#128, #148).
 - `Ctl.World.write_local/2`, and `Ctl.Commands.last_object/1` public, for an app's own commands (#4).
 - `config set KEY @FILE` in the generated script reads the value from a host file and sends it in the environment, never on a command line; `config get` of a map or a list prints it formatted on several lines. `Ctl.World.read_local/1`, and the Recorder's `:files` option (#1, #3).

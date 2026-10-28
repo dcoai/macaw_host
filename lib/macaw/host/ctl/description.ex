@@ -40,6 +40,8 @@ defmodule Macaw.Host.Ctl.Description do
   | `:seeds` | `[]` | app config `init` seeds: `[tz: :timezone, phx_host: :hostname, phx_scheme: "http"]` |
   | `:migrate_keys` | `[]` | `{old key, config key, old default}` that `init --migrate` carries from `<name>-env` |
   | `:settings` | `[]` | the app's own host settings: `{"KEY", "default", "help"}` |
+  | `:host_network` | `true` | `false` refuses `NETWORK=host`, for an app whose listeners must stay off the host's interfaces |
+  | `:app_keys` | `[]` | `{"KEY", "config_key"}`: a name `env set` refuses, pointing at `config set config_key` |
   | `:app_commands` | `"ctl/app_commands.ex"` | the file defining `Ctl.AppCommands`, or `false` for none |
   | `:output` | `"container/<name>-ctl"` | where the script is written |
 
@@ -61,6 +63,8 @@ defmodule Macaw.Host.Ctl.Description do
     :seeds,
     :migrate_keys,
     :settings,
+    :host_network,
+    :app_keys,
     :app_commands,
     :output
   ]
@@ -149,6 +153,8 @@ defmodule Macaw.Host.Ctl.Description do
           seeds: [],
           migrate_keys: [],
           settings: [],
+          host_network: true,
+          app_keys: [],
           app_commands: "ctl/app_commands.ex",
           output: "container/#{name}-ctl"
         },
@@ -156,7 +162,8 @@ defmodule Macaw.Host.Ctl.Description do
       )
 
     with :ok <- check_optional(d),
-         :ok <- check_settings(d.settings) do
+         :ok <- check_settings(d.settings),
+         :ok <- check_app_keys(d.app_keys, core_settings(d) ++ d.settings) do
       [uid, gid] = d.uid |> String.split(":") |> Enum.map(&String.to_integer/1)
 
       {:ok,
@@ -185,6 +192,8 @@ defmodule Macaw.Host.Ctl.Description do
       {:migrate_keys, d.migrate_keys, &migrate_keys?/1,
        "a list of {\"OLD_KEY\", \"config_key\", nil | :hostname | :timezone | \"default\"}"},
       {:settings, d.settings, &is_list/1, "a list of {\"KEY\", \"default\", \"help\"}"},
+      {:host_network, d.host_network, &is_boolean/1, "true or false"},
+      {:app_keys, d.app_keys, &app_keys?/1, "a list of {\"KEY\", \"config_key\"}"},
       {:app_commands, d.app_commands, &(&1 == false or nonempty?(&1)), "a path, or false"},
       {:output, d.output, &nonempty?/1, "a path"}
     ])
@@ -247,6 +256,28 @@ defmodule Macaw.Host.Ctl.Description do
   defp ids?(v), do: is_binary(v) and Regex.match?(~r/^\d+:\d+$/, v)
   defp port?(v), do: is_integer(v) and v in 1..65_535
   defp absolute?(v), do: is_binary(v) and String.starts_with?(v, "/")
+
+  defp app_keys?(keys) do
+    is_list(keys) and
+      Enum.all?(keys, fn
+        {key, config_key} when is_binary(key) and is_binary(config_key) ->
+          Regex.match?(~r/^[A-Z][A-Z0-9_]*$/, key) and
+            Regex.match?(~r/^[a-z][a-z0-9_]*$/, config_key)
+
+        _ ->
+          false
+      end)
+  end
+
+  # A name refused by `env set` can't also be a host setting it edits.
+  defp check_app_keys(app_keys, settings) do
+    host = Enum.map(settings, &elem(&1, 0))
+
+    case Enum.find(app_keys, fn {key, _} -> key in host end) do
+      nil -> :ok
+      {key, _} -> {:error, ":ctl :app_keys names #{key}, which is a host setting"}
+    end
+  end
 
   defp seeds?(seeds) do
     is_list(seeds) and

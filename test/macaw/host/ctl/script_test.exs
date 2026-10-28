@@ -231,7 +231,12 @@ defmodule Macaw.Host.Ctl.ScriptTest do
       assert Ctl.Env.data_path(env) == Path.join(home, "data")
       assert Ctl.Env.legacy_path(env) == Path.join(dir, "sample-env")
       assert Ctl.Env.host_network?(env)
-      assert Ctl.Env.app_keys() == %{"PHX_HOST" => "phx_host", "TZ" => "tz"}
+
+      assert Ctl.Env.app_keys() == %{
+               "PHX_HOST" => "phx_host",
+               "TZ" => "tz",
+               "SMTP_HOST" => "smtp_host"
+             }
 
       # <PREFIX>_DATA_DIR wins over the script's line when set non-empty.
       elsewhere = Path.join(dir, "elsewhere")

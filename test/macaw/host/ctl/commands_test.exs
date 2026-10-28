@@ -161,6 +161,26 @@ defmodule Macaw.Host.Ctl.CommandsTest do
     assert out =~ ~r/checks:\n  database:\s+ok/
   end
 
+  @tag verifies: "cmd-status-app-lines"
+  test "status prints the app's own host lines, and a list of maps one element a line",
+       %{script: script} do
+    report =
+      ~s({"healthy":true,"untrusted_proxies":[{"peer":"10.0.32.64","requests":57},{"peer":"10.0.0.9","requests":21}]})
+
+    Recorder.install([
+      @daemon_up,
+      @running,
+      @image_present,
+      {["docker", "exec", "sample"], {report <> "\n", 0}}
+    ])
+
+    assert {:ok, out} = run(script, ["status"])
+    assert out =~ ~r/^data:     .*\nadmin:    port 4001$/m
+
+    assert out =~
+             "untrusted_proxies:\n  - peer: 10.0.32.64, requests: 57\n  - peer: 10.0.0.9, requests: 21\n"
+  end
+
   describe "config" do
     @set_answer {["docker", "run", "--rm", "--user", "2060:2060"],
                  {~s({"ok":true,"set":"tz","restart":"restart to apply"}\n), 0}}
@@ -425,6 +445,26 @@ defmodule Macaw.Host.Ctl.CommandsTest do
               _} = run(script, ["env", "set", "PHX_HOST=x"])
     end
 
+    @tag verifies: "cmd-env-app-validate"
+    test "the app's own checks run on every edit; an app key is refused",
+         %{script: script, home: home} do
+      conf = Path.join(home, "sample.conf")
+      File.write!(conf, "PORT=8080\n")
+      Recorder.install()
+
+      assert {{:error, "ADMIN_PORT must be a port number (1–65535), not \"99999\""}, _} =
+               run(script, ["env", "set", "ADMIN_PORT=99999"])
+
+      assert {{:error, "ADMIN_PORT must differ from PORT (both 8080)"}, _} =
+               run(script, ["env", "set", "ADMIN_PORT=8080"])
+
+      assert {{:error,
+               "SMTP_HOST is Sample's own configuration now: ./sample-ctl config set smtp_host VALUE"},
+              _} = run(script, ["env", "set", "SMTP_HOST=mail.example"])
+
+      assert File.read!(conf) == "PORT=8080\n"
+    end
+
     @tag verifies: "cmd-env-unset"
     test "unset takes a setting name, matched as written, never a pattern",
          %{script: script, home: home} do
@@ -554,6 +594,33 @@ defmodule Macaw.Host.Ctl.CommandsTest do
         assert ["-e", "SAMPLE_CTL_ARGS"] == Enum.slice(argv, 6, 2)
         refute Enum.any?(argv, &(&1 =~ "pbx.lan" or &1 =~ "Europe/Oslo"))
       end
+    end
+
+    @tag verifies: "cmd-init-app-seeds"
+    test "seeds what the app computes from this host's settings, after the description's",
+         %{tmp_dir: tmp_dir} do
+      script = Recorder.script!(Path.join(tmp_dir, "sample-ctl"))
+      home = Path.join(tmp_dir, "new-home")
+
+      listing = @listing <> ~s({"name":"admin_url","value":"nil","source":"default"}\n)
+
+      Recorder.install([
+        @daemon_up,
+        @image_present,
+        @owned,
+        {["docker", "run", "--rm", "--user", "2060:2060"], {listing, 0}},
+        {["hostname", "-f"], {"pbx.lan\n", 0}},
+        {["timedatectl"], {"Europe/Oslo\n", 0}}
+      ])
+
+      assert {:ok, _} = run(script, ["init", home])
+
+      assert [
+               [{"SAMPLE_CTL_ARGS", ~s(["list"])}],
+               [{"SAMPLE_CTL_ARGS", ~s(["set","phx_host","\\"pbx.lan\\""])}],
+               [{"SAMPLE_CTL_ARGS", ~s(["set","tz","\\"Europe/Oslo\\""])}],
+               [{"SAMPLE_CTL_ARGS", ~s(["set","admin_url","\\"http://localhost:4001\\""])}]
+             ] = for({_argv, opts} <- eval_calls(), do: opts[:env])
     end
 
     @tag verifies: "cmd-init-force"

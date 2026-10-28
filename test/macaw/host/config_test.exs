@@ -597,9 +597,9 @@ defmodule Macaw.Host.ConfigTest do
   end
 
   def even(v) when is_integer(v) and rem(v, 2) == 0, do: {:ok, v}
+  def even(_), do: {:error, "must be even"}
 
   # A check that normalizes: the value the app uses is half what is stored.
   def halve(v) when is_integer(v) and rem(v, 2) == 0, do: {:ok, div(v, 2)}
   def halve(_), do: {:error, "must be even"}
-  def even(_), do: {:error, "must be even"}
 end

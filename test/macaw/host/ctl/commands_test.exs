@@ -189,6 +189,79 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       assert out =~ "Sample's configuration updated — ./sample-ctl restart to apply"
     end
 
+    @tag verifies: "cmd-config-set-file"
+    test "set KEY @FILE reads the value on the host; it travels in the env, never in argv",
+         %{script: script, tmp_dir: tmp_dir} do
+      file = Path.join(tmp_dir, "auth.exs")
+      block = ~s(%{sources: [%{name: "nas", bind_password: "correct-horse-battery-staple"}]})
+
+      Recorder.install([@daemon_up, @image_present, @owned, @set_answer],
+        files: %{file => block <> "\n\n"}
+      )
+
+      assert {:ok, out} = run(script, ["config", "set", "tz", "@" <> file])
+
+      assert {:read_local, ^file} = Enum.find(Recorder.calls(), &match?({:read_local, _}, &1))
+      assert [{argv, opts}] = eval_calls()
+      refute Enum.any?(argv, &(&1 =~ "correct-horse" or &1 =~ file))
+      assert opts[:env] == [{"SAMPLE_CTL_ARGS", JSON.encode!(["set", "tz", block])}]
+      assert out =~ "Sample's configuration updated"
+    end
+
+    @tag verifies: "cmd-config-set-file-missing"
+    test "set KEY @FILE of a file that can't be read is one error, and nothing runs",
+         %{script: script} do
+      Recorder.install([@daemon_up, @image_present, @owned, @set_answer])
+
+      assert {{:error, message}, _} = run(script, ["config", "set", "tz", "@/nowhere/auth.exs"])
+
+      assert message ==
+               ~s(cannot read "/nowhere/auth.exs" for config set tz: no such file or directory)
+
+      assert eval_calls() == []
+    end
+
+    @tag verifies: "cmd-config-get-block"
+    test "get of a map or a list prints it on several lines, formatted; a scalar stays on one",
+         %{script: script} do
+      answer =
+        ~s|{"name":"auth","value":"%{sources: [%{name: \\"nas\\", bind_password: \\"set (…aple)\\"}, %{type: :local}]}","source":"config.exs","fault":"auth: must be a sign-in block"}\n|
+
+      Recorder.install([
+        @daemon_up,
+        @image_present,
+        @owned,
+        {["docker", "run", "--rm", "--user", "2060:2060"], {answer, 0}}
+      ])
+
+      assert {:ok, out} = run(script, ["config", "get", "auth"])
+
+      lines =
+        out |> String.split("\n", trim: true) |> Enum.drop_while(&(&1 != "auth (config.exs):"))
+
+      assert hd(lines) == "auth (config.exs):"
+      assert "  %{" in lines
+
+      assert Enum.any?(
+               lines,
+               &(&1 =~ ~r/^      %\{name: "nas", bind_password: "set \(…aple\)"\},?$/)
+             )
+
+      assert List.last(lines) == "INVALID: auth: must be a sign-in block"
+
+      scalar = ~s({"name":"tz","value":"\\"Etc/UTC\\"","source":"default"}\n)
+
+      Recorder.install([
+        @daemon_up,
+        @image_present,
+        @owned,
+        {["docker", "run", "--rm", "--user", "2060:2060"], {scalar, 0}}
+      ])
+
+      assert {:ok, out} = run(script, ["config", "get", "tz"])
+      assert out =~ ~r/^tz="Etc\/UTC"\s+\(default\)$/m
+    end
+
     @tag verifies: "cmd-config-list"
     test "list prints each setting and its source", %{script: script} do
       listing =
@@ -820,7 +893,8 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       assert [{argv, [env: [{"SAMPLE_CTL_ARGS", ~s(["unset","tz"])}]]}] = eval_calls()
       refute Enum.any?(argv, &(&1 =~ "unset"))
 
-      assert {{:error, "usage: ./sample-ctl config list | get KEY | set KEY VALUE | unset KEY"},
+      assert {{:error,
+               "usage: ./sample-ctl config list | get KEY | set KEY VALUE | set KEY @FILE | unset KEY"},
               _} =
                run(script, ["config", "list", "--reveal"])
 

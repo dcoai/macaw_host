@@ -90,7 +90,8 @@ defmodule Macaw.Host.Ctl.RecorderTest do
         {["docker", "ps"], {"by list", 0}},
         {["docker"], {"any docker", 0}}
       ],
-      answer: "an answer"
+      answer: "an answer",
+      files: %{"/host/auth.exs" => "%{a: 1}"}
     )
 
     assert Ctl.World.cmd("docker", ["ps", "-a"]) == {"by function", 0}
@@ -100,6 +101,8 @@ defmodule Macaw.Host.Ctl.RecorderTest do
     assert Ctl.World.prompt("Where? ") == "an answer"
     assert Ctl.World.prompt_secret("Password: ") == "an answer"
     Ctl.World.sleep(5)
+    assert Ctl.World.read_local("/host/auth.exs") == {:ok, "%{a: 1}"}
+    assert Ctl.World.read_local("/host/other.exs") == {:error, :enoent}
 
     assert Recorder.calls() == [
              {"docker", ["ps", "-a"], []},
@@ -108,7 +111,9 @@ defmodule Macaw.Host.Ctl.RecorderTest do
              {"docker", ["logs"], [into: ""]},
              {:prompt, "Where? "},
              {:prompt_secret, "Password: "},
-             {:sleep, 5}
+             {:sleep, 5},
+             {:read_local, "/host/auth.exs"},
+             {:read_local, "/host/other.exs"}
            ]
 
     assert Recorder.docker_calls() == [["ps", "-a"], ["info"], ["logs"]]

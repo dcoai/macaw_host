@@ -98,15 +98,28 @@ over "# mine\nPORT=8080\nNAME=x\nPORTS=1\n", unset of ".*", "P.RT", "port", "POR
 
 ## 4. config {#host-cmd-config}
 
-`./<app>-ctl config list | get KEY | set KEY VALUE | unset KEY` is **the app's own configuration,** kept on the data volume (`config.exs`) and **changed by the app itself** (`Ctl.Commands.config/2`): `<Release>.config()` in a throwaway container of the image, as the app's uid ([07 §6](07-ctl-script.md#host-script-docker)), so it works whether or not the app is running.
+`./<app>-ctl config list | get KEY | set KEY VALUE | set KEY @FILE | unset KEY` is **the app's own configuration,** kept on the data volume (`config.exs`) and **changed by the app itself** (`Ctl.Commands.config/2`): `<Release>.config()` in a throwaway container of the image, as the app's uid ([07 §6](07-ctl-script.md#host-script-docker)), so it works whether or not the app is running.
 - **The words travel as JSON in `<PREFIX>_CTL_ARGS`, by name, never on a command line;** the answer is one JSON object per line ([03 §3](03-release.md#host-release-config)).
-- **Output:** a setting as `name=value (source)`, and one the app reports with a `fault` (a value that doesn't fit its type, [03 §3](03-release.md#host-release-config)) as `name=value (source) INVALID: <fault>`; `set name`; `unset name`; any other object as its JSON line. After `set` or `unset`: `"<Title>'s configuration updated — ./<app>-ctl restart to apply"`.
+- **`set KEY @FILE`** (macaw_host#1) reads the value from a file on the host (`Ctl.World.read_local/1`), its trailing whitespace trimmed, and sends it as `set KEY <text>` the same way, in the environment: **a value too long to type, or one holding a secret (an LDAP block with its bind password), never reaches a command line** that `ps` or a shell's history would keep. A file that can't be read is the one error `cannot read "<FILE>" for config set KEY: <reason>`, and nothing runs. A value can't begin with `@` otherwise: no literal does.
+- **Output:** a setting as `name=value (source)`, and one the app reports with a `fault` (a value that doesn't fit its type, [03 §3](03-release.md#host-release-config)) as `name=value (source) INVALID: <fault>`; `set name`; `unset name`; any other object as its JSON line. After `set` or `unset`: `"<Title>'s configuration updated — ./<app>-ctl restart to apply"`. **`get` of a setting whose value is a map or a list** prints `name (source):`, then the value formatted (`Code.format_string!/2`, 60 columns) on several lines, each indented two spaces, then `INVALID: <fault>` when it has one; a value that isn't valid Elixir (a type's own `show/1` text) prints on one line as `list` does.
 - **The release's failure** (its one line on stderr reaching the terminal as it is) **passes its exit status on.**
 - **The app masks its secrets itself, and never shows them;** `config` has no `--reveal` (macaw_compose#48).
 - `VALUE` is a literal as the app reads it: a string is typed with its quotes, `config set tz '"Europe/Oslo"'`.
 
 ```test:cmd-config-set
 config set tz "\"Europe/Oslo\"" runs exactly one eval container with -e SAMPLE_CTL_ARGS, carrying ["set","tz","\"Europe/Oslo\""] in its env only, prints "set tz" and "Sample's configuration updated — ./sample-ctl restart to apply"
+```
+
+```test:cmd-config-set-file
+config set tz @FILE, the file holding a block with a bind password and trailing blank lines: read_local of FILE is recorded, the one eval container's argv holds neither the password nor the path, and SAMPLE_CTL_ARGS in its env is ["set","tz",<the block, trimmed>]
+```
+
+```test:cmd-config-set-file-missing
+config set tz @/nowhere/auth.exs answers {:error, "cannot read \"/nowhere/auth.exs\" for config set tz: no such file or directory"} and runs no eval container
+```
+
+```test:cmd-config-get-block
+get of an auth block with a fault prints "auth (config.exs):", a line "  %{", the source line indented with its masked password, and "INVALID: auth: must be a sign-in block" last; get of a string prints tz="Etc/UTC" (default) on one line
 ```
 
 ```test:cmd-config-list

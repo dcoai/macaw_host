@@ -153,7 +153,7 @@ defmodule Ctl.Commands do
   # number or an atom as written.
   defp config_set(env, key, value) do
     with {:ok, objects} <- release_config(env, ["set", key, inspect(value)]) do
-      print_config(objects)
+      print_config("list", objects)
     end
   end
 
@@ -361,7 +361,7 @@ defmodule Ctl.Commands do
     end
   end
 
-  @config_usage "usage: ./#{@script} config list | get KEY | set KEY VALUE | unset KEY"
+  @config_usage "usage: ./#{@script} config list | get KEY | set KEY VALUE | set KEY @FILE | unset KEY"
 
   @doc """
   The app's own configuration, kept on the data volume (`config.exs`) and
@@ -370,12 +370,18 @@ defmodule Ctl.Commands do
   travel as JSON in `<PREFIX>_CTL_ARGS`, by name, never on a command line;
   the answer is one JSON object per line. The app masks its secrets itself,
   and never shows them.
+
+  `set KEY @FILE` reads the value from a file on the host, for a value too
+  long to type or holding a secret: the text travels like any other value,
+  in the environment, never on a command line `ps` or a shell's history
+  would keep.
   """
   def config(env, args) do
     with :ok <- require_home(env) do
       case args do
         ["list"] -> config_call(env, args)
         ["get", _key] -> config_call(env, args)
+        ["set", key, "@" <> file] -> config_from_file(env, key, file)
         ["set", _key, _value] -> config_call(env, args)
         ["unset", _key] -> config_call(env, args)
         _ -> {:error, @config_usage}
@@ -383,17 +389,42 @@ defmodule Ctl.Commands do
     end
   end
 
+  defp config_from_file(env, key, file) do
+    case Ctl.World.read_local(file) do
+      {:ok, text} ->
+        config_call(env, ["set", key, String.trim_trailing(text)])
+
+      {:error, reason} ->
+        {:error, "cannot read #{inspect(file)} for config set #{key}: #{:file.format_error(reason)}"}
+    end
+  end
+
   defp config_call(env, args) do
     with :ok <- ensure_ready(env),
          {:ok, objects} <- release_config(env, args),
-         :ok <- print_config(objects) do
+         :ok <- print_config(hd(args), objects) do
       if hd(args) in ["set", "unset"],
         do: IO.puts("#{@title}'s configuration updated — ./#{@script} restart to apply"),
         else: :ok
     end
   end
 
-  defp print_config(objects) do
+  # One setting asked for by name, its value a map or a list: on several
+  # lines, formatted, so a block can be read.
+  defp print_config("get", [%{"name" => name, "value" => value, "source" => source} = object])
+       when binary_part(value, 0, 1) in ["%", "["] do
+    case Code.string_to_quoted(value) do
+      {:ok, _} ->
+        IO.puts("#{name} (#{source}):")
+        value |> Code.format_string!(line_length: 60) |> IO.iodata_to_binary() |> String.split("\n") |> Enum.each(&IO.puts("  " <> &1))
+        if object["fault"], do: IO.puts("INVALID: #{object["fault"]}"), else: :ok
+
+      {:error, _} ->
+        print_config("list", [object])
+    end
+  end
+
+  defp print_config(_command, objects) do
     Enum.each(objects, fn
       # A value that doesn't fit its type: what the app would refuse to boot with.
       %{"name" => name, "value" => value, "source" => source, "fault" => fault} ->

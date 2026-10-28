@@ -1,7 +1,8 @@
 defmodule Ctl.World do
   @moduledoc """
   Everything that reaches outside the script goes through here: running a
-  command, sleeping, and asking the person at the terminal. The real module
+  command, sleeping, reading a file on the host, and asking the person at
+  the terminal. The real module
   is the default; a test puts a replacement under `:ctl_world` in its
   process dictionary and receives every call instead.
   """
@@ -17,6 +18,9 @@ defmodule Ctl.World do
   def cmd(exe, args, opts \\ []), do: impl().cmd(exe, args, opts)
 
   def sleep(ms), do: impl().sleep(ms)
+
+  @doc "A file on the host, as `File.read/1` answers: `{:ok, text}` or `{:error, reason}`."
+  def read_local(path), do: impl().read_local(path)
 
   @doc "Asks a question on the terminal; the answer, trimmed, or \"\"."
   def prompt(question), do: impl().prompt(question)
@@ -46,6 +50,8 @@ defmodule Ctl.World.Real do
   end
 
   def sleep(ms), do: Process.sleep(ms)
+
+  def read_local(path), do: File.read(path)
 
   def prompt(question) do
     case IO.gets(question) do

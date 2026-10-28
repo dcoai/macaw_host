@@ -50,7 +50,9 @@ defmodule Macaw.Host.Ctl.Recorder do
 
   @doc """
   Makes this process's `Ctl.World` the recorder. Options: `:answer`, what
-  `prompt/1` and `prompt_secret/1` answer (default `""`).
+  `prompt/1` and `prompt_secret/1` answer (default `""`); `:files`, a map
+  of host paths to their text, what `read_local/1` answers (any other path
+  is `{:error, :enoent}`).
   """
   @spec install(
           [{list() | (String.t(), [String.t()] -> boolean()), {String.t(), integer()}}],
@@ -62,10 +64,14 @@ defmodule Macaw.Host.Ctl.Recorder do
     Process.put(:ctl_world_replies, replies)
     Process.put(:ctl_world_calls, [])
     Process.put(:ctl_world_answer, Keyword.get(opts, :answer, ""))
+    Process.put(:ctl_world_files, Keyword.get(opts, :files, %{}))
     :ok
   end
 
-  @doc "Every call so far, in order: `{exe, args, opts}`, `{:sleep, ms}` or `{:prompt, question}`."
+  @doc """
+  Every call so far, in order: `{exe, args, opts}`, `{:sleep, ms}`,
+  `{:read_local, path}` or `{:prompt, question}`.
+  """
   @spec calls() :: [tuple()]
   def calls, do: Process.get(:ctl_world_calls, []) |> Enum.reverse()
 
@@ -124,6 +130,16 @@ defmodule Macaw.Host.Ctl.Recorder do
 
   @doc false
   def sleep(ms), do: record({:sleep, ms})
+
+  @doc false
+  def read_local(path) do
+    record({:read_local, path})
+
+    case Process.get(:ctl_world_files, %{}) do
+      %{^path => text} -> {:ok, text}
+      _ -> {:error, :enoent}
+    end
+  end
 
   @doc false
   def prompt(question) do

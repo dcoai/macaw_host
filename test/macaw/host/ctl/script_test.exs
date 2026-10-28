@@ -40,8 +40,15 @@ defmodule Macaw.Host.Ctl.ScriptTest do
 
   describe "the real world" do
     @tag verifies: "script-world-real"
-    test "an executable not on PATH answers {\"\", 127}, never a raise" do
+    @tag :tmp_dir
+    test "an executable not on PATH answers {\"\", 127}, never a raise; read_local answers as File.read",
+         %{tmp_dir: dir} do
       assert Ctl.World.Real.cmd("macaw-host-no-such-executable", [], []) == {"", 127}
+
+      path = Path.join(dir, "value.exs")
+      File.write!(path, "%{a: 1}\n")
+      assert Ctl.World.Real.read_local(path) == {:ok, "%{a: 1}\n"}
+      assert Ctl.World.Real.read_local(Path.join(dir, "none")) == {:error, :enoent}
     end
   end
 

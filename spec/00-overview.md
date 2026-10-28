@@ -14,7 +14,7 @@ Every deployable project carried the same host-side code, implemented by hand, a
 
 Backups of the data directory and database were part of the proposal and left this release: two adopters on two database stacks, filed later as Research (macaw_compose#33, owner decision).
 
-`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://github.com/dcoai/macaw/blob/main/spec/00-overview.md#overview-packaging)). It is released by git tag (v0.1.2: `compare/2` marks the end of either text and no longer crashes on a missing final newline, macaw_compose#65; v0.1.1: the fixes of macaw_compose#70, each with a test of its failing path).
+`macaw_host` sits outside the composition model: `macaw_layers`, `macaw_data`, `macaw_compose` and `macaw_live` never depend on it ([macaw_compose 00 §4](https://github.com/dcoai/macaw/blob/main/spec/00-overview.md#overview-packaging)). It is on Hex since v0.1.4 (macaw#155). v0.2.0 adds what Collpa needs to adopt the config commands and the generated script safely (macaw_host#1): custom setting types that show their own values, `config set KEY @FILE`, the terminal reached by path, and app hooks for validation, seeds and status lines. Before Hex it was released by git tag (v0.1.2: `compare/2` marks the end of either text and no longer crashes on a missing final newline, macaw_compose#65; v0.1.1: the fixes of macaw_compose#70, each with a test of its failing path).
 
 ## 2. The deployable-containers pattern {#host-pattern}
 

@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.2.0 (2026-10-28)
 
 - App hooks in `Ctl.AppCommands`, each optional: `validate/1` (the app's own checks of its host settings, on every `env set`, `start` and throwaway container), `seeds/1` (app config `init` seeds from this host's settings) and `status_lines/1` (host lines in `status`). `status` prints a list of maps one element a line (#1, #5).
 - Description keys `host_network` (`false` refuses `NETWORK=host`) and `:app_keys` (names `env set` refuses as the app's own configuration) (#5).

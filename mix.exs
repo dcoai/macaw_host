@@ -1,6 +1,7 @@
 defmodule Macaw.Host.MixProject do
   use Mix.Project
 
+  @source_url "https://github.com/dcoai/macaw_host"
   @version "0.1.2"
 
   def project do
@@ -14,8 +15,9 @@ defmodule Macaw.Host.MixProject do
       description:
         "Host glue for deployable Phoenix apps: the literal config.exs on the data volume, " <>
           "generated secrets, release tasks, health, build info, and the <app>-ctl generator.",
-      package: [licenses: ["MIT"]],
-      docs: [main: "readme", extras: ["README.md"]],
+      source_url: @source_url,
+      package: package(),
+      docs: [main: "readme", extras: ["README.md", "CHANGELOG.md"], source_ref: "v#{@version}"],
       # Fixtures are inputs to the tests (an app's ctl/app_commands.ex), not tests.
       test_ignore_filters: [&String.starts_with?(&1, "test/fixtures/")]
     ]
@@ -28,6 +30,18 @@ defmodule Macaw.Host.MixProject do
   defp elixirc_paths(:test), do: ["lib", "test/support"]
   defp elixirc_paths(_), do: ["lib"]
 
+  # Published on Hex from its public home, mirrored from GitLab (dco-tek/macaw_compose#155).
+  defp package do
+    [
+      licenses: ["MIT"],
+      links: %{
+        "GitHub" => @source_url,
+        "Changelog" => "https://hexdocs.pm/macaw_host/changelog.html"
+      },
+      files: ~w(lib priv spec mix.exs README.md LICENSE CHANGELOG.md .formatter.exs)
+    ]
+  end
+
   defp deps do
     [
       {:plug, "~> 1.16", optional: true},
@@ -35,6 +49,8 @@ defmodule Macaw.Host.MixProject do
       {:stream_data, "~> 1.1", only: :test},
       # A real repo for the database checks (Health.database/1, migrations/1, Release.migrate/1).
       {:ecto_sqlite3, "~> 0.17", only: :test},
+      # Docs for Hex (macaw_compose#155); dev only.
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
       # Spec, tests and code kept aligned (macaw_compose spec/00 §4.1); dev/test only.
       {:surfex, "~> 0.10.0", only: [:dev, :test], runtime: false}
     ]

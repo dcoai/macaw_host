@@ -27,8 +27,11 @@ defmodule Macaw.Host.OverviewTest do
     assert Enum.sort(by_kind[{true, nil}]) == [:ecto_sql, :plug]
     assert by_kind[{false, [:dev, :test]}] == [:surfex]
     assert Enum.sort(by_kind[{false, :test}]) == [:ecto_sqlite3, :stream_data]
+    # Docs for Hex (macaw_compose#155).
+    assert by_kind[{false, :dev}] == [:ex_doc]
 
     assert Map.keys(by_kind) |> Enum.sort() == [
+             {false, :dev},
              {false, :test},
              {false, [:dev, :test]},
              {true, nil}

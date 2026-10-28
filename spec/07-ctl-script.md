@@ -42,14 +42,27 @@ splicing a fresh script that also has @data_dir "/data" in Ctl.Docker with a cur
 
 ## 3. The world {#host-script-world}
 
-**Everything that reaches outside the script goes through `Ctl.World`:** running a command (`Ctl.World.cmd/3`, answering `{output, exit status}` like `System.cmd/3`), sleeping (`sleep/1`), reading a file on the host (`read_local/1`, answering as `File.read/1` does: `{:ok, text}` or `{:error, reason}`; macaw_host#1), asking at the terminal (`prompt/1`, the answer trimmed or `""`; `prompt_secret/1`, read without echo). The real module, `Ctl.World.Real`, is the default; **a test puts a replacement under `:ctl_world` in its process dictionary** (`Macaw.Host.Ctl.Recorder`, [06 §6](06-ctl-generator.md#host-gen-recorder)) and receives every call instead.
+**Everything that reaches outside the script goes through `Ctl.World`:** running a command (`Ctl.World.cmd/3`, answering `{output, exit status}` like `System.cmd/3`), sleeping (`sleep/1`), reading and writing a file on the host (`read_local/1` and `write_local/2`, answering as `File.read/1` and `File.write/2` do; macaw_host#1), asking at the terminal (`prompt/1`, the answer trimmed or `""`; `prompt_secret/1`, read without echo). The real module, `Ctl.World.Real`, is the default; **a test puts a replacement under `:ctl_world` in its process dictionary** (`Macaw.Host.Ctl.Recorder`, [06 §6](06-ctl-generator.md#host-gen-recorder)) and receives every call instead.
 
 `Ctl.World.Real`:
 - an executable not on PATH is `{"", 127}`, the shell's answer, which callers already handle, never a raise;
-- `tty: true` hands the terminal itself to the command (through `sh -c 'exec "$0" "$@" </dev/tty >/dev/tty 2>&1'`), since `docker exec -it` refuses the pipes a port gives it.
+- `tty: true` hands the terminal itself to the command, since `docker exec -it` refuses the pipes a port gives it: `sh -c 'exec "$0" "$@" <"$TTY_IN" >"$TTY_OUT" 2>&1'`, the two paths in the environment. **The terminal is reached by path, not as `/dev/tty`** (collpa#128, macaw_host#1): the BEAM starts every command in a new session (`setsid`), so a child has no controlling terminal and `/dev/tty` fails there; the BEAM's own stdin and stdout are the terminal, `/proc/<pid>/fd/0` and `/1`. A host without `/proc` uses `/dev/tty`.
+- `prompt_secret/1` turns the terminal's echo off (`stty -echo`, on the terminal by path) **before** showing the question, so an answer typed or pasted the moment it appears is never echoed (collpa#148), reads the answer from the BEAM's own stdin, and turns echo back on. **Without a terminal it refuses** with one line on stderr, `"<question> needs a terminal to ask without echoing: run it in one (over ssh, ssh -t)."`, and exit status 1, rather than read an empty password.
+
+```test:script-world-secret
+under a pseudo-terminal, prompt_secret("password: ") with "S3cretX" typed once the prompt shows answers "S3cretX", and the terminal shows it once (the answer), never echoed
+```
+
+```test:script-world-tty
+under a pseudo-terminal, cmd/3 with tty: true runs a command whose stdin and stdout are both terminals
+```
+
+```test:script-world-secret-refuses
+with stdin from /dev/null, prompt_secret("Admin password: ") exits with status 1 and "Admin password: needs a terminal to ask without echoing"
+```
 
 ```test:script-world-real
-Ctl.World.Real.cmd/3 of an executable not on PATH answers {"", 127} without raising; read_local/1 of a file is {:ok, its text}, of a missing one {:error, :enoent}
+Ctl.World.Real.cmd/3 of an executable not on PATH answers {"", 127} without raising; read_local/1 of a file is {:ok, its text}, of a missing one {:error, :enoent}; write_local/2 writes bytes to a host file and answers :ok
 ```
 
 ## 4. Secrets on output {#host-script-secret}

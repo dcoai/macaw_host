@@ -70,7 +70,8 @@ defmodule Macaw.Host.Ctl.Recorder do
 
   @doc """
   Every call so far, in order: `{exe, args, opts}`, `{:sleep, ms}`,
-  `{:read_local, path}` or `{:prompt, question}`.
+  `{:read_local, path}`, `{:write_local, path, bytes}` (nothing is written)
+  or `{:prompt, question}`.
   """
   @spec calls() :: [tuple()]
   def calls, do: Process.get(:ctl_world_calls, []) |> Enum.reverse()
@@ -130,6 +131,12 @@ defmodule Macaw.Host.Ctl.Recorder do
 
   @doc false
   def sleep(ms), do: record({:sleep, ms})
+
+  @doc false
+  def write_local(path, bytes) do
+    record({:write_local, path, bytes})
+    :ok
+  end
 
   @doc false
   def read_local(path) do

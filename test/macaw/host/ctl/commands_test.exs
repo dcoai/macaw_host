@@ -37,6 +37,15 @@ defmodule Macaw.Host.Ctl.CommandsTest do
         do: {argv, opts}
   end
 
+  describe "an app command's helpers" do
+    @tag verifies: "gen-app-last-object"
+    test "last_object/1 is the last JSON object, past log lines" do
+      out = ~s(12:00:00 [warning] noise\n{"first":1}\nnot json\n{"second":2}\n)
+      assert Ctl.Commands.last_object(out) == %{"second" => 2}
+      assert Ctl.Commands.last_object("only logs\n") == nil
+    end
+  end
+
   describe "start" do
     @tag verifies: "cmd-start"
     test "recreates the container with the ulimit, its name, the port and the data volume",

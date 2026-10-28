@@ -733,7 +733,12 @@ defmodule Ctl.Commands do
     end
   end
 
-  defp last_object(out) do
+  @doc """
+  The last JSON object in a command's output, or nil: a release command may
+  print log lines (a warning from the node) before its answer. For an app's
+  own commands too.
+  """
+  def last_object(out) do
     out
     |> String.split("\n", trim: true)
     |> Enum.reverse()

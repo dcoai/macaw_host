@@ -1,8 +1,8 @@
 defmodule Ctl.World do
   @moduledoc """
   Everything that reaches outside the script goes through here: running a
-  command, sleeping, reading a file on the host, and asking the person at
-  the terminal. The real module
+  command, sleeping, reading and writing a file on the host, and asking the
+  person at the terminal. The real module
   is the default; a test puts a replacement under `:ctl_world` in its
   process dictionary and receives every call instead.
   """
@@ -25,8 +25,15 @@ defmodule Ctl.World do
   @doc "Asks a question on the terminal; the answer, trimmed, or \"\"."
   def prompt(question), do: impl().prompt(question)
 
-  @doc "Asks for a password on the terminal without echoing it; the answer, or \"\"."
+  @doc """
+  Asks for a password on the terminal without echoing it; the answer, or
+  `""`. Without a terminal it refuses (a line on stderr, exit status 1)
+  rather than read an empty password.
+  """
   def prompt_secret(question), do: impl().prompt_secret(question)
+
+  @doc "Writes a file on the host (a QR code, an export): `:ok` or `{:error, reason}`, as `File.write/2`."
+  def write_local(path, bytes), do: impl().write_local(path, bytes)
 end
 
 defmodule Ctl.World.Real do
@@ -41,8 +48,12 @@ defmodule Ctl.World.Real do
 
       path when tty? ->
         # A port has pipes for stdin and stdout, which is what `docker exec
-        # -it` refuses; the terminal itself is handed over instead.
-        System.cmd("sh", ["-c", ~s(exec "$0" "$@" </dev/tty >/dev/tty 2>&1), path | args], opts)
+        # -it` refuses; the terminal itself is handed over instead, by path
+        # (terminal/0), since the child has no /dev/tty (collpa#128).
+        {input, output} = terminal()
+        tty_env = [{"TTY_IN", input}, {"TTY_OUT", output}]
+        opts = Keyword.update(opts, :env, tty_env, &(tty_env ++ &1))
+        System.cmd("sh", ["-c", ~s(exec "$0" "$@" <"$TTY_IN" >"$TTY_OUT" 2>&1), path | args], opts)
 
       path ->
         System.cmd(path, args, opts)
@@ -60,18 +71,45 @@ defmodule Ctl.World.Real do
     end
   end
 
+  # The terminal stops echoing while the answer is typed. The answer is read
+  # here, from the BEAM's own stdin; only `stty` runs in a child, on the
+  # terminal by path (collpa#128). Echo goes off before the question shows,
+  # so an answer typed or pasted the moment it appears is never echoed
+  # (collpa#148). Without a terminal it refuses rather than read "".
   def prompt_secret(question) do
-    IO.write(question)
+    {input, _output} = terminal()
 
-    answer =
-      case :io.get_password() do
-        text when is_list(text) -> text |> List.to_string() |> String.trim_trailing("\n")
-        _ -> ""
-      end
+    if terminal?(input) do
+      {_, 0} = System.cmd("sh", ["-c", ~S(stty -echo <"$0"), input])
+      IO.write(question)
+      answer = IO.gets("")
+      {_, 0} = System.cmd("sh", ["-c", ~S(stty echo <"$0"), input])
+      IO.write("\n")
+      if is_binary(answer), do: String.trim_trailing(answer, "\n"), else: ""
+    else
+      IO.puts(
+        :stderr,
+        "#{String.trim(question)} needs a terminal to ask without echoing: run it in one (over ssh, ssh -t)."
+      )
 
-    IO.write("\n")
-    answer
+      System.halt(1)
+    end
   end
+
+  def write_local(path, bytes), do: File.write(path, bytes)
+
+  # The terminal, as paths a child can open (collpa#128). The BEAM starts
+  # every command in a new session (`setsid`), so a child has no controlling
+  # terminal and `/dev/tty` fails there; the BEAM's own stdin and stdout are
+  # the terminal, reached through /proc. A host without /proc uses /dev/tty.
+  @doc false
+  def terminal do
+    fd = "/proc/#{System.pid()}/fd"
+    if File.dir?(fd), do: {fd <> "/0", fd <> "/1"}, else: {"/dev/tty", "/dev/tty"}
+  end
+
+  defp terminal?(input),
+    do: match?({_, 0}, System.cmd("sh", ["-c", ~S(test -t 0 <"$0"), input], stderr_to_stdout: true))
 end
 
 defmodule Ctl.Script do

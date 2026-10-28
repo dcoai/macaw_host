@@ -103,6 +103,7 @@ defmodule Macaw.Host.Ctl.RecorderTest do
     Ctl.World.sleep(5)
     assert Ctl.World.read_local("/host/auth.exs") == {:ok, "%{a: 1}"}
     assert Ctl.World.read_local("/host/other.exs") == {:error, :enoent}
+    assert Ctl.World.write_local("/host/qr.png", <<1, 2>>) == :ok
 
     assert Recorder.calls() == [
              {"docker", ["ps", "-a"], []},
@@ -113,7 +114,8 @@ defmodule Macaw.Host.Ctl.RecorderTest do
              {:prompt_secret, "Password: "},
              {:sleep, 5},
              {:read_local, "/host/auth.exs"},
-             {:read_local, "/host/other.exs"}
+             {:read_local, "/host/other.exs"},
+             {:write_local, "/host/qr.png", <<1, 2>>}
            ]
 
     assert Recorder.docker_calls() == [["ps", "-a"], ["info"], ["logs"]]

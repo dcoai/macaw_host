@@ -157,7 +157,7 @@ The app's file holds one module, `Ctl.AppCommands`, **and nothing beside it:** a
 
 **A name the script already has** (`start`, `config` …) **is never dispatched to it:** the common commands come first.
 
-It builds its docker command lines with `Ctl.Docker` (`exec_args/3`, `rpc_args/2`, `eval_args/3`, `release_args/4`), runs them with `Ctl.Commands.stream/1` or `interactive/1`, checks the container with `Ctl.Commands.ensure_running/1` or `ensure_ready/1`, and reads what it manages from `Ctl.App`. **A secret goes to the container by name,** through `eval_args/3` or `release_args/4`, never on a command line.
+It builds its docker command lines with `Ctl.Docker` (`exec_args/3`, `rpc_args/2`, `eval_args/3`, `release_args/4`), runs them with `Ctl.Commands.stream/1` or `interactive/1`, checks the container with `Ctl.Commands.ensure_running/1` or `ensure_ready/1`, reads a release's answer with `Ctl.Commands.decode_lines/1` (every line an object) or `Ctl.Commands.last_object/1` (the last JSON object, after any log lines; macaw_host#1), reads and writes files on the host with `Ctl.World.read_local/1` and `write_local/2` (so a test records them), asks with `Ctl.World.prompt/1` and `prompt_secret/1`, and reads what it manages from `Ctl.App`. **A secret goes to the container by name,** through `eval_args/3` or `release_args/4`, never on a command line.
 
 ```test:gen-app-commands-secret
 the sample's reset-password alice, the password answered at prompt_secret, runs one eval container whose argv is exactly the eval argv of 07 §6 with -e SAMPLE_CTL_ARGS -e SAMPLE_CTL_PASSWORD and Sample.Release.reset_password(), no element of it holding the password, with env [{"SAMPLE_CTL_ARGS", "[\"alice\"]"}, {"SAMPLE_CTL_PASSWORD", <the password>}]
@@ -184,6 +184,10 @@ a fixture with Ctl.AppCommands and then `alias Ctl.AppCommands` and a File.rm_rf
 the sample commands plus a defmodule Ctl.Home give "may define only Ctl.AppCommands, not Ctl.Home"; the sample commands with an @data_dir line give "must not set @data_dir"; an unterminated module gives "does not parse: line 1"
 ```
 
+```test:gen-app-last-object
+Ctl.Commands.last_object/1 of a log line, a JSON object, a line that isn't JSON and a second object is the second object; of output with no object, nil
+```
+
 ## 5. Comparing for --check {#host-gen-compare}
 
 `Macaw.Host.Ctl.compare/2` is `:ok` when the committed text is exactly the generated text, else `{:error, message}` naming the first line that differs: `"the committed script differs from what the generator makes, first at line N:"`, then `generated:` and `committed:`, each line `inspect`ed, or `(end of file)` where one text has ended (the newline ending a text's last line starts no line of its own). When every line agrees and only the final newline differs, it names the last line, the side without the newline marked `(no newline at the end of the file)`.
@@ -208,7 +212,7 @@ Ctl.dispatch(["start"], %{}, script)
 ```
 
 - `Macaw.Host.Ctl.Recorder.load!/1` loads a generated script's modules without running it: `:ctl_no_main` is set in the process dictionary while the file is required, which keeps its last line from calling `main/1`. A script is loaded once per VM, since its modules are global.
-- `Macaw.Host.Ctl.Recorder.install/2` makes this process's `Ctl.World` the recorder, with the canned replies: `{matcher, {output, status}}`, the matcher a list that `[exe | args]` must start with, or a function of `(exe, args)`. **The first matching entry answers; anything unmatched is `{"", 1}`,** a docker that says no. Option `:answer` is what `prompt/1` and `prompt_secret/1` answer (`""` by default); option `:files`, a map of host paths to their text, is what `read_local/1` answers, any other path `{:error, :enoent}` (macaw_host#1). A call with `into:` (a streamed one) has its output collected into that collectable.
+- `Macaw.Host.Ctl.Recorder.install/2` makes this process's `Ctl.World` the recorder, with the canned replies: `{matcher, {output, status}}`, the matcher a list that `[exe | args]` must start with, or a function of `(exe, args)`. **The first matching entry answers; anything unmatched is `{"", 1}`,** a docker that says no. Option `:answer` is what `prompt/1` and `prompt_secret/1` answer (`""` by default); option `:files`, a map of host paths to their text, is what `read_local/1` answers, any other path `{:error, :enoent}`; `write_local/2` writes nothing, is recorded as `{:write_local, path, bytes}` and answers `:ok` (macaw_host#1). A call with `into:` (a streamed one) has its output collected into that collectable.
 - `Macaw.Host.Ctl.Recorder.calls/0` is every call so far, in order: `{exe, args, opts}` (the options say where a secret's value travels, in `:env`), `{:sleep, ms}`, `{:prompt, question}`, `{:prompt_secret, question}`. `Macaw.Host.Ctl.Recorder.docker_calls/0` is the argv of each docker call.
 - **Everything lives in the calling process's dictionary,** so async tests never see each other's calls.
 - `Macaw.Host.Ctl.Recorder.script!/2` writes a minimal script whose `Ctl.Home` names a data directory (or `nil`): the only part of the file the loaded modules read from disk. `Macaw.Host.Ctl.Recorder.home!/2` makes a host under a temporary directory, `home/data/` and a script naming `home`, and returns `{script, home}`.

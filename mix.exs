@@ -17,7 +17,13 @@ defmodule Macaw.Host.MixProject do
           "generated secrets, release tasks, health, build info, and the <app>-ctl generator.",
       source_url: @source_url,
       package: package(),
-      docs: [main: "readme", extras: ["README.md", "CHANGELOG.md"], source_ref: "v#{@version}"],
+      docs: [
+        main: "readme",
+        extras: ["README.md", "CHANGELOG.md"],
+        source_ref: "v#{@version}",
+        logo: "brand/logo/macaw_scarlet.svg",
+        assets: %{"brand/logo" => "brand/logo"}
+      ],
       # Fixtures are inputs to the tests (an app's ctl/app_commands.ex), not tests.
       test_ignore_filters: [&String.starts_with?(&1, "test/fixtures/")]
     ]

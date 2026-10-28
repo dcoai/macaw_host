@@ -79,13 +79,19 @@ property: write!/3 then read!/1 returns the same map, for maps of nested lists, 
 | `:port` | an integer in 1–65535 | the same, in 1–65535 |
 | `{:enum, [atom]}` | one of the atoms | one of their names, trimmed |
 | `:string_list` | a list of strings | comma-separated, each trimmed, empty ones dropped |
+| `{:custom, module}` | `module.check(value)` | `module.cast(string)` |
 | `{:custom, {m, f}}` | whatever `m.f(value)` returns | the same, given the string |
 
 - **An enum name from an env var is compared as a string,** so no atom is made.
 - `{:custom, {m, f}}`: `m.f/1` must return `{:ok, value}` or `{:error, message}`.
+- **`{:custom, module}`**: the module implements the `Macaw.Host.Config.Type` behavior (macaw_host#1), and so owns the type: `check/1` (a file value), `cast/1` (an env var's string), `show/1` (how a value is shown, §5) and `describe/0` (the type in words). It is for what the built-in types can't hold: a structure with a secret inside (collpa#141's `auth` block, an LDAP source with its bind password), an address, a block of fields. `show/1` must take any term, since a value that didn't check is shown by it too.
 - A `:secret` is a string that is masked wherever a value is shown (§5).
 - `Macaw.Host.Config.Types.describe/1` is a type in words, for faults: `"a port number (1–65535)"`, `"one of [:open, :closed]"`.
 - Faults: a file value of the wrong shape is `"must be <describe(type)>"`, except an enum, `"must be one of [:open, :closed]"`, and a list with a non-string, `"must be a list of strings"`; an env value is `"must be <describe(type)>"`, except a boolean, `"must be true or false"`, and an enum, `"must be one of open, closed"` (the names).
+
+```test:types-custom-module
+{:custom, Macaw.Host.Test.SignInBlock}: check of %{password: "x"} is {:ok, …} and of 3 "must be a sign-in block"; cast is the module's refusal; describe/1 is "a sign-in block"
+```
 
 ```test:types-env
 from env vars: :boolean "1" is true, :string_list "a, b,,c" is ["a", "b", "c"], :integer "-5" is -5, {:enum, [:open, :closed]} "open" is :open
@@ -131,7 +137,7 @@ load!/3 of a file with port 0 and debug 3 raises ArgumentError naming "config.ex
 ## 5. Showing values {#host-config-show}
 
 - `Macaw.Host.Config.show/1` is every loaded setting as `{name, shown, source}`, in declared order, the value shown by `mask/2`.
-- `Macaw.Host.Config.mask/2` shows a value: a `:secret` by the masking rule (§5.1); a value of any other type is `inspect`ed. A secret's value is never shown.
+- `Macaw.Host.Config.mask/2` shows a value: a `:secret` by the masking rule (§5.1); a `{:custom, module}` value by `module.show/1`, so a secret inside a structure is masked by the type that knows where it is; a value of any other type is `inspect`ed. A secret's value is never shown, whether the value checked or not.
 
 ### 5.1 The masking rule {#host-config-mask}
 
@@ -150,6 +156,10 @@ with smtp_password "hunter2-long-secret" in the file, show/1 holds {:smtp_passwo
 mask(:secret, …) of nil and "" is "unset", of "abcde" and 15 characters "set", of 12 x's then "1234" "set (…1234)"; mask(:port, 4000) is "4000"
 ```
 
+```test:config-mask-custom
+mask/2 of a sign-in block with a 28-character password shows its host and "set (…aple)", never the password; of :not_a_block, the module's "(not a sign-in block)"
+```
+
 ```test:mask-agree
 Macaw.Host.Config.mask(:secret, v) equals the generated script's Ctl.Secret.mask(v) for nil, "", short, 15-character, 16-character and longer values, multi-byte ones included
 ```
@@ -157,12 +167,17 @@ Macaw.Host.Config.mask(:secret, v) equals the generated script's Ctl.Secret.mask
 ## 6. Editing for the ctl {#host-config-edit}
 
 `<app>-ctl config set` and `unset` change the file through the app ([03 §3](03-release.md#host-release-config)), with these:
-- `Macaw.Host.Config.put!/4` sets a setting, by name as typed, to a value as typed. The name is **matched as a string** against the declared names, so nothing typed becomes an atom (`"no setting named prot"`). The value is parsed as a literal (`parse_value/2`; nothing is evaluated) and checked against the setting's type. **An enum value is matched by name,** `open` or `:open`, so a typo answers `"must be one of open, closed"` instead of an atom fault. It returns `{:ok, value}` after writing the file (§1.4, with a header saying the file is a literal map edited with `<app>-ctl config set` and that an env var still wins), or `{:error, why}` with **the file untouched.**
+- `Macaw.Host.Config.put!/4` sets a setting, by name as typed, to a value as typed. The name is **matched as a string** against the declared names, so nothing typed becomes an atom (`"no setting named prot"`). The value is parsed as a literal (`parse_value/2`; nothing is evaluated) and checked against the setting's type. **An enum value is matched by name,** `open` or `:open`, so a typo answers `"must be one of open, closed"` instead of an atom fault. It returns `{:ok, value}`, the checked value, after writing the file (§1.4, with a header saying the file is a literal map edited with `<app>-ctl config set` and that an env var still wins), or `{:error, why}` with **the file untouched.**
+  - **What is stored is the literal as typed,** never the check's result (macaw_host#1). A check may normalize, resolving `{:env, "VAR"}` to the secret it names or an address to a tuple; storing that would write the secret into the file in clear text, or a value the file can't hold. An enum is stored as its atom.
 - `Macaw.Host.Config.delete!/3` removes a setting from the file, so it falls back to its env var or default: `:ok`, or `{:error, "no setting named …"}`.
 - Both read the file with `Macaw.Host.Config.read_file/1`: `{:ok, map}`, or a file with faults as `{:error, message}`, every fault on one line joined by `; `, with the file untouched. Both replace the key whether the file wrote it as an atom or a string.
 
 ```test:config-put
 put!/4 "port" "8443" gives {:ok, 8443} and "mode" ":open" {:ok, :open}; then "port" "70000", "prot" "1" and "public_host" "System.halt()" each give an error, and the file is byte for byte as before and reads %{port: 8443, mode: :open}
+```
+
+```test:config-put-stores-typed
+put!/4 of auth as %{host: "nas", password: {:env, VAR}} answers the resolved block and leaves %{auth: %{host: "nas", password: {:env, VAR}}} in the file, the secret nowhere in it; an {m, f} check that halves its value stores 8 for "8" and answers 4
 ```
 
 ```test:config-delete

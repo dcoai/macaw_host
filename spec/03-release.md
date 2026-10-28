@@ -67,7 +67,7 @@ in a fresh VM, migrate of an app with no :ecto_repos exits non-zero with output 
 
 - **`list` and `get` show each setting as the app would load it,** through `Macaw.Host.Config.resolve_setting/4`, the path `Macaw.Host.Config.load!/3` takes ([01 §3](01-config.md#host-config-resolve)): an env var cast by its type, a file key written as an atom or a string, else the default.
 - **A setting's `source`** is `"env <VAR>"` when its env var is set (even empty), else `"config.exs"` when the file has it, else `"default"`.
-- **Its `value` is the resolved, typed value, shown:** `Macaw.Host.Config.mask/2` of it, so a secret is masked ([01 §5.1](01-config.md#host-config-mask)) and anything else `inspect`ed (`":closed"`, `"8443"` for a port, from the file or from an env var `" 8443 "`).
+- **Its `value` is the resolved, typed value, shown:** `Macaw.Host.Config.mask/2` of it, so a secret is masked ([01 §5.1](01-config.md#host-config-mask)), a `{:custom, module}` value is shown by its `show/1` ([01 §2](01-config.md#host-config-types)), and anything else `inspect`ed (`":closed"`, `"8443"` for a port, from the file or from an env var `" 8443 "`).
 - **A value that doesn't fit its type** is shown as found (masked likewise) with a fourth key, `fault`, the fault the app's boot would raise (`"RT_MODE: must be one of open, closed"`). The script prints it as invalid ([08 §4](08-ctl-commands.md#host-cmd-config)).
 - **Every edit answers "restart to apply":** nothing restarts on its own.
 - `VALUE` is a literal as typed: a string value is typed with its quotes (`"\"Europe/Oslo\""`).
@@ -78,6 +78,10 @@ set port "8443", get port (value "8443", source "config.exs"), list (mode ":clos
 
 ```test:release-config-secret
 after set smtp_password "\"correct-horse-battery\"", get smtp_password shows "set (…tery)"
+```
+
+```test:release-config-custom
+with an auth setting of {:custom, SignInBlock}: set auth to a block holding a 28-character password, then get shows "set (…aple)" and no list value holds the password; a file auth that isn't a block gets "(not a sign-in block)" with a fault naming "must be a sign-in block"
 ```
 
 ```test:release-config-string-key

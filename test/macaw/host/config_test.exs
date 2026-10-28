@@ -548,6 +548,58 @@ defmodule Macaw.Host.ConfigTest do
     end
   end
 
+  describe "custom types (macaw_host#1)" do
+    @block {:custom, Macaw.Host.Test.SignInBlock}
+
+    @tag verifies: "types-custom-module"
+    test "a {:custom, module} type checks, casts and describes through its module" do
+      assert Config.Types.check(@block, %{password: "x"}) == {:ok, %{password: "x"}}
+      assert Config.Types.check(@block, 3) == {:error, "must be a sign-in block"}
+
+      assert Config.Types.cast(@block, "anything") ==
+               {:error, "is set in config.exs, not an env var"}
+
+      assert Config.Types.describe(@block) == "a sign-in block"
+    end
+
+    @tag verifies: "config-mask-custom"
+    test "a custom value is shown by its show/1, a secret inside masked, even one that didn't check" do
+      block = %{host: "nas", password: "correct-horse-battery-staple"}
+      shown = Config.mask(@block, block)
+      assert shown =~ ~s(host: "nas")
+      assert shown =~ "set (…aple)"
+      refute shown =~ "correct-horse"
+
+      assert Config.mask(@block, :not_a_block) == "(not a sign-in block)"
+    end
+
+    @tag verifies: "config-put-stores-typed"
+    test "put!/4 stores the literal as typed, never the check's normalized result", %{
+      tmp_dir: dir
+    } do
+      path = Path.join(dir, "config.exs")
+      var = "MACAW_HOST_TEST_PW_#{System.unique_integer([:positive])}"
+      System.put_env(var, "the-resolved-secret")
+      on_exit(fn -> System.delete_env(var) end)
+      specs = [{:auth, @block, nil}, {:even, {:custom, {__MODULE__, :halve}}, 0}]
+
+      # The check resolves the reference; the file keeps the reference.
+      assert {:ok, %{password: "the-resolved-secret"}} =
+               Config.put!(path, specs, "auth", ~s(%{host: "nas", password: {:env, "#{var}"}}))
+
+      assert Literal.read!(path) == %{auth: %{host: "nas", password: {:env, var}}}
+      refute File.read!(path) =~ "the-resolved-secret"
+
+      # An {m, f} check that normalizes is stored as typed too.
+      assert {:ok, 4} = Config.put!(path, specs, "even", "8")
+      assert Literal.read!(path).even == 8
+    end
+  end
+
   def even(v) when is_integer(v) and rem(v, 2) == 0, do: {:ok, v}
+
+  # A check that normalizes: the value the app uses is half what is stored.
+  def halve(v) when is_integer(v) and rem(v, 2) == 0, do: {:ok, div(v, 2)}
+  def halve(_), do: {:error, "must be even"}
   def even(_), do: {:error, "must be even"}
 end

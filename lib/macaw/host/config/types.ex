@@ -12,9 +12,11 @@ defmodule Macaw.Host.Config.Types do
   | `:integer`, `:pos_integer`, `:port` | an integer in range | decimal digits |
   | `{:enum, [atom]}` | one of the atoms | its name |
   | `:string_list` | a list of strings | comma-separated |
+  | `{:custom, module}` | `module.check(value)` (`Macaw.Host.Config.Type`) | `module.cast(string)` |
   | `{:custom, {m, f}}` | `m.f(value)` returns `{:ok, v}` or `{:error, message}` | the same, given the string |
 
-  A `:secret` is masked wherever a value is shown (`Macaw.Host.Config.show/1`, `Macaw.Host.Config.mask/2`).
+  A `:secret` is masked wherever a value is shown (`Macaw.Host.Config.show/1`, `Macaw.Host.Config.mask/2`);
+  a `{:custom, module}` value is shown by its `show/1`.
   Enum names from env vars are compared as strings, so no atom is made.
   """
 
@@ -28,6 +30,7 @@ defmodule Macaw.Host.Config.Types do
           | :port
           | {:enum, [atom()]}
           | :string_list
+          | {:custom, module()}
           | {:custom, {module(), atom()}}
 
   @doc "Checks a value from `config.exs`: `{:ok, value}` or `{:error, why}`."
@@ -49,6 +52,7 @@ defmodule Macaw.Host.Config.Types do
   end
 
   def check({:custom, {m, f}}, v), do: apply(m, f, [v])
+  def check({:custom, m}, v) when is_atom(m), do: m.check(v)
   def check(type, _v), do: {:error, "must be #{describe(type)}"}
 
   @doc "Reads a value from an env var's string: `{:ok, value}` or `{:error, why}`."
@@ -84,6 +88,7 @@ defmodule Macaw.Host.Config.Types do
     do: {:ok, s |> String.split(",") |> Enum.map(&String.trim/1) |> Enum.reject(&(&1 == ""))}
 
   def cast({:custom, {m, f}}, s), do: apply(m, f, [s])
+  def cast({:custom, m}, s) when is_atom(m), do: m.cast(s)
 
   @doc "A type in words, for fault messages."
   @spec describe(t()) :: String.t()
@@ -97,4 +102,5 @@ defmodule Macaw.Host.Config.Types do
   def describe({:enum, values}), do: "one of #{inspect(values)}"
   def describe(:string_list), do: "a list of strings"
   def describe({:custom, {m, f}}), do: "accepted by #{inspect(m)}.#{f}/1"
+  def describe({:custom, m}) when is_atom(m), do: m.describe()
 end

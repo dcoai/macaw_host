@@ -153,6 +153,7 @@ defmodule Macaw.Host.Config do
     if String.length(v) >= 16, do: "set (…" <> String.slice(v, -4, 4) <> ")", else: "set"
   end
 
+  def mask({:custom, m}, v) when is_atom(m), do: m.show(v)
   def mask(_type, v), do: inspect(v)
 
   @doc "The env var a setting is read from: `PREFIX_NAME`."
@@ -161,15 +162,17 @@ defmodule Macaw.Host.Config do
 
   @doc """
   Sets `name` in the file at `path` to the literal `text`, after checking it
-  against the setting's type. `{:ok, value}` or `{:error, why}`; the file is
-  untouched on error.
+  against the setting's type. `{:ok, value}`, the checked value, or
+  `{:error, why}`; the file is untouched on error. **What is stored is the
+  literal as typed,** never the check's result, which may have resolved a
+  reference to a secret (macaw_host#1).
   """
   @spec put!(Path.t(), [spec()], String.t(), String.t()) :: {:ok, term()} | {:error, String.t()}
   def put!(path, specs, name, text) do
     with {:ok, {key, type}} <- lookup(specs, name),
-         {:ok, value} <- typed(type, text),
+         {:ok, {literal, value}} <- typed(type, text),
          {:ok, file} <- read_file(path) do
-      Literal.write!(path, Map.put(drop_key(file, key), key, value), header())
+      Literal.write!(path, Map.put(drop_key(file, key), key, literal), header())
       {:ok, value}
     end
   end
@@ -225,13 +228,22 @@ defmodule Macaw.Host.Config do
     end
   end
 
+  # `{literal to store, checked value}`. The literal is what was typed,
+  # never the check's result: a check may normalize (resolve a reference to
+  # a secret, turn an address into a tuple), and that must not reach the
+  # file (macaw_host#1).
+  #
   # An enum value is matched by its name as a string (`open` or `:open`),
   # as from an env var, so a typo is "must be one of …", never an atom.
-  defp typed({:enum, _} = type, text),
-    do: Types.cast(type, String.trim_leading(String.trim(text), ":"))
+  defp typed({:enum, _} = type, text) do
+    with {:ok, value} <- Types.cast(type, String.trim_leading(String.trim(text), ":")),
+         do: {:ok, {value, value}}
+  end
 
   defp typed(type, text) do
-    with {:ok, value} <- parse_value(text), do: Types.check(type, value)
+    with {:ok, literal} <- parse_value(text),
+         {:ok, value} <- Types.check(type, literal),
+         do: {:ok, {literal, value}}
   end
 
   defp parse_value(text) do

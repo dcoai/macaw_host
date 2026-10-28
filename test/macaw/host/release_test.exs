@@ -12,6 +12,32 @@ defmodule Macaw.Host.ReleaseTest do
   ]
 
   describe "config commands" do
+    @tag verifies: "release-config-custom"
+    test "a custom value is shown by its show/1 on get, list and a fault", %{tmp_dir: dir} do
+      path = Path.join(dir, "config.exs")
+      specs = @specs ++ [{:auth, {:custom, Macaw.Host.Test.SignInBlock}, nil}]
+
+      assert {:ok, [%{set: "auth"}]} =
+               Release.config_command(path, specs, "RT", [
+                 "set",
+                 "auth",
+                 ~s(%{host: "nas", password: "correct-horse-battery-staple"})
+               ])
+
+      assert {:ok, [%{value: shown}]} = Release.config_command(path, specs, "RT", ["get", "auth"])
+      assert shown =~ "set (…aple)"
+      {:ok, list} = Release.config_command(path, specs, "RT", ["list"])
+      refute inspect(list) =~ "correct-horse"
+
+      # A value that doesn't check is shown by the type too, with its fault.
+      Macaw.Host.Config.Literal.write!(path, %{auth: [password: "correct-horse-battery-staple"]})
+
+      assert {:ok, [%{value: "(not a sign-in block)", fault: fault}]} =
+               Release.config_command(path, specs, "RT", ["get", "auth"])
+
+      assert fault =~ "must be a sign-in block"
+    end
+
     @tag verifies: "release-config-cycle"
     test "set, get, list and unset, with the source of each value", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")

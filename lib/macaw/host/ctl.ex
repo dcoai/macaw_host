@@ -35,7 +35,15 @@ defmodule Macaw.Host.Ctl do
     do: `:ok`, `{:error, message}` (printed, exit 1) or `{:halt, status}`.
     It is called only once the data directory is set.
   - optionally `run_args(env)`: extra `docker run` arguments (more ports,
-    say), placed before DOCKER_RUN_ARGS.
+    say), placed before DOCKER_RUN_ARGS;
+  - optionally `validate(env)`: the app's own checks of its host settings;
+  - optionally `before_start(env)`: the app's precondition for `start`;
+  - optionally `init_flags/0` and `after_init(env, flags)`: init's own
+    flags for the app, and the step after init, safe to rerun;
+  - optionally `seeds(env)`: app config init seeds from this host's settings;
+  - optionally `status_lines(env)`: lines `status` prints with the host's.
+
+  Spec 06 §4 is the contract in full.
 
   It builds its docker command lines with `Ctl.Docker` (`exec_args/3`,
   `rpc_args/2`, `eval_args/3`, `release_args/4`), runs them with

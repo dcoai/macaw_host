@@ -225,7 +225,6 @@ defmodule Macaw.Host.Ctl.CommandsTest do
   test "start asks the app's before_start, and its refusal touches no container",
        %{script: script} do
     Process.put(:sample_no_account, true)
-    on_exit(fn -> Process.delete(:sample_no_account) end)
     Recorder.install([@daemon_up, @image_present, @owned, @running])
 
     assert {{:error, "nobody could sign in: create an account first"}, _out} =
@@ -733,6 +732,74 @@ defmodule Macaw.Host.Ctl.CommandsTest do
 
       assert Recorder.calls() == []
     end
+
+    @tag verifies: "cmd-init-app-flags"
+    test "takes the app's own flags beside its own, refusing an undeclared, valueless or repeated one",
+         %{tmp_dir: tmp_dir} do
+      script = Recorder.script!(Path.join(tmp_dir, "sample-ctl"))
+      home = Path.join(tmp_dir, "new-home")
+      {_, help} = run(script, ["help"])
+      assert help =~ "init [DIR] [--quiet] [--user VALUE]"
+
+      Recorder.install()
+
+      for {args, message} <- [
+            {["--nope", home],
+             "usage: ./sample-ctl init [DIR] [--force] [--migrate] [--quiet] [--user VALUE]"},
+            {[home, "--user"], "init --user needs a value"},
+            {["--user", "--quiet", home], "init --user needs a value"},
+            {["--quiet", "--quiet", home], "init takes --quiet once"},
+            {["--user", "ann", "--user", "bob", home], "init takes --user once"}
+          ] do
+        assert {{:error, ^message}, _} = run(script, ["init" | args])
+      end
+
+      assert Recorder.calls() == []
+      assert {:ok, nil} = Ctl.Script.data_dir(File.read!(script))
+      refute_received {:after_init, _, _}
+
+      install_for_init()
+      assert {:ok, out} = run(script, ["init", "--user", "ann", "--quiet", home])
+      assert out =~ "ready: ./sample-ctl start"
+      assert_received {:after_init, ^home, %{"--user" => "ann", "--quiet" => true}}
+
+      # Without them, the app is given none.
+      other = Path.join(tmp_dir, "other-home")
+      install_for_init()
+      assert {:ok, _} = run(script, ["init", "--force", other])
+      assert_received {:after_init, ^other, flags}
+      assert flags == %{}
+    end
+
+    @tag verifies: "cmd-init-after"
+    test "after_init runs once the directory is adopted and seeded, again on a rerun, and its answer is init's",
+         %{tmp_dir: tmp_dir} do
+      script = Recorder.script!(Path.join(tmp_dir, "sample-ctl"))
+      home = Path.join(tmp_dir, "new-home")
+
+      install_for_init()
+      assert {:ok, _} = run(script, ["init", "--user", "ann", home])
+      assert_received {:after_init, ^home, %{"--user" => "ann"}}
+      # Adopted and seeded before it ran.
+      assert {:ok, ^home} = Ctl.Script.data_dir(File.read!(script))
+      assert [_list | _sets] = eval_calls()
+
+      # A rerun on the adopted directory: the settings kept, the step again.
+      install_for_init()
+      assert {:ok, out} = run(script, ["init", "--force", "--user", "ann", home])
+      assert out =~ "keeping #{Path.join(home, "sample.conf")}"
+      assert out =~ "ready: ./sample-ctl start"
+      assert_received {:after_init, ^home, %{"--user" => "ann"}}
+
+      # Its refusal is init's, and init is not ready.
+      Process.put(:sample_after_init, {:error, "no such user: bob"})
+      install_for_init()
+
+      assert {{:error, "no such user: bob"}, out} =
+               run(script, ["init", "--force", "--user", "bob", home])
+
+      refute out =~ "ready:"
+    end
   end
 
   # Each section's own text, beside the hints inside it.
@@ -835,10 +902,14 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       bare = Recorder.script!(Path.join(tmp_dir, "bare-ctl"))
       Recorder.install()
 
-      assert {{:error, "usage: ./sample-ctl init [DIR] [--force] [--migrate]"}, _} =
+      assert {{:error,
+               "usage: ./sample-ctl init [DIR] [--force] [--migrate] [--quiet] [--user VALUE]"},
+              _} =
                run(bare, ["init", "--frob"])
 
-      assert {{:error, "usage: ./sample-ctl init [DIR] [--force] [--migrate]"}, _} =
+      assert {{:error,
+               "usage: ./sample-ctl init [DIR] [--force] [--migrate] [--quiet] [--user VALUE]"},
+              _} =
                run(bare, ["init", "a", "b"])
 
       # A directory it can't create (a path under a regular file, for root too).
@@ -904,6 +975,17 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       # No seeds: ready at once, no docker asked.
       assert out =~ "ready: ./sample-ctl start"
       assert File.dir?(Path.join(own_home, "data"))
+
+      # An app without init_flags/0 has no flags of its own, and without
+      # after_init/2 a rerun is ready as before.
+      {out, 1} = System.cmd("sh", ["-c", ~s(elixir "$0" init --user ann 2>&1), generated])
+      assert out =~ "usage: ./sample-ctl init [DIR] [--force] [--migrate]"
+
+      {out, 0} =
+        System.cmd("sh", ["-c", ~s(elixir "$0" init --force "$1" 2>&1), generated, own_home])
+
+      assert out =~ "keeping #{Path.join(own_home, "sample.conf")}"
+      assert out =~ "ready: ./sample-ctl start"
     end
 
     @tag verifies: "host-cmd-seed"
@@ -984,6 +1066,8 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       ])
 
       assert {:ok, out} = run(script, ["init", "--migrate", home])
+      # The app's step follows the migration.
+      assert_received {:after_init, ^home, %{}}
 
       [copy] =
         for ["run", "--rm", "--user", "0:0", "--entrypoint", "sh" | _] = a <-

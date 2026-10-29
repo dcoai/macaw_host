@@ -73,6 +73,19 @@ defmodule Ctl.AppCommands do
       else: :ok
   end
 
+  @doc "init's own flags for the sample: the console's first user, and quiet."
+  def init_flags, do: [{"--user", :value}, {"--quiet", :switch}]
+
+  @doc """
+  The sample's step after init: tells the test process (the one running
+  the script) what it was given, and answers :ok, or the refusal the test
+  asks for (`Process.put(:sample_after_init, {:error, message})`).
+  """
+  def after_init(env, flags) do
+    send(self(), {:after_init, env.data_dir, flags})
+    Process.get(:sample_after_init, :ok)
+  end
+
   @doc "The admin console's port, on status's host lines."
   def status_lines(env), do: ["admin:    port #{Ctl.Env.get(env, "ADMIN_PORT")}"]
 end

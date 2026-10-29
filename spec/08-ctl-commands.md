@@ -15,15 +15,16 @@ The common commands of every generated `<app>-ctl` (`Ctl.Commands`), as a host r
 
 ## 2. init {#host-cmd-init}
 
-`./<app>-ctl init [DIR] [--force] [--migrate]` sets up this host's data directory (`Ctl.Commands.init/2`):
-1. **refused** with the usage for an unknown flag or more than one directory; refused when the script already names a directory and `--force` isn't given (`"this <app>-ctl already uses <dir> — ./<app>-ctl init --force DIR to point it elsewhere"`); with `--migrate`, refused when there is no `<app>-env` beside the script (`"nothing to migrate: there is no <path>"`);
+`./<app>-ctl init [DIR] [--force] [--migrate]`, with the app's own flags if it declares any (`Ctl.AppCommands.init_flags/0`, [06 §4](06-ctl-generator.md#host-gen-app-commands)), sets up this host's data directory (`Ctl.Commands.init/2`):
+1. **refused** with the usage, which names the app's flags too (`[--user VALUE]`, a switch `[--quiet]`, as `help`'s init line does), for a flag neither init's nor the app's (defaults closed: an app that declares none has none) or more than one directory; refused with `"init <flag> needs a value"` for an app's value flag that is last or followed by another flag (`--user --force`), and with `"init takes <flag> once"` for a flag given twice; refused when the script already names a directory and `--force` isn't given (`"this <app>-ctl already uses <dir> — ./<app>-ctl init --force DIR to point it elsewhere"`); with `--migrate`, refused when there is no `<app>-env` beside the script (`"nothing to migrate: there is no <path>"`);
 2. **the directory** is `DIR`, or asked for (`"Where should this host keep <Title>'s data? [<data_home>] "`, an empty answer taking the default), expanded;
 3. **creates it and its `data/`.** When it can't (creating it may need root, the one thing the script won't do on its own), it fails printing the exact line to run, `sudo install -d -o "$USER" <dir>`, and to run init again;
 4. **writes `@data_dir` into the script** (mode 0755), only `Ctl.Home` changing ([07 §2](07-ctl-script.md#host-script-home));
 5. **writes `<app>.conf`** (mode 0600) from the settings in effect, **unless it exists,** which is someone's settings and is kept; with `--migrate`, from the old script's host settings over the defaults;
-6. prints `"<script> now uses <dir>"`, then **seeds** the app's configuration (§2.1).
+6. prints `"<script> now uses <dir>"`, then **seeds** the app's configuration (§2.1);
+7. **the app's own step,** `Ctl.AppCommands.after_init/2` when it defines one, given a map of the app's flags given (`%{"--user" => "ann", "--quiet" => true}`; a switch is `true`, a value flag its value, `%{}` for none). Its answer is init's: an error ends init with its message; `:ok` prints `"ready: ./<app>-ctl start"` (after a migration, whose closing words come before the step, nothing more). **It runs on every successful init,** a rerun on an adopted directory (`init --force DIR` with the same DIR) included, so the app must make it safe to rerun. A value flag's value reaches the app in-process, never on a docker command line the script writes; the app passes it to a container by name ([06 §4](06-ctl-generator.md#host-gen-app-commands)).
 
-With `--migrate`, steps 4–6 wait: the container is stopped and the data copied first (§2.2), and only then are `@data_dir` and `<app>.conf` written and the migration finished.
+With `--migrate`, steps 4–6 wait: the container is stopped and the data copied first (§2.2), and only then are `@data_dir` and `<app>.conf` written and the migration finished; step 7 follows the migration.
 
 ```test:cmd-init
 init <dir> on a script with no directory: the script's data_dir/1 is <dir>, <dir>/data exists, sample.conf starts with the header and holds PORT=4000 and "# The admin console's port.\nADMIN_PORT=4001", and the output says "now uses <dir>" and "ready: ./sample-ctl start"
@@ -33,9 +34,17 @@ init <dir> on a script with no directory: the script's data_dir/1 is <dir>, <dir
 init /elsewhere on a script that already names a directory is refused with the --force message, and nothing is called
 ```
 
+```test:cmd-init-app-flags
+the sample declares --user (:value) and --quiet (:switch): init --user ann --quiet <dir> succeeds and its after_init is given %{"--user" => "ann", "--quiet" => true}, init --force <other> an empty map; --nope is refused with the usage, which names the app's flags ("init [DIR] [--force] [--migrate] [--quiet] [--user VALUE]", and help's init line the same), --user last or before --quiet with "init --user needs a value", --quiet twice with "init takes --quiet once", each before anything is called; a script without the hooks refuses init --user ann with the usage and inits as before
+```
+
+```test:cmd-init-after
+after_init runs once <dir> is named in the script and seeded; init --force <dir> on the adopted directory keeps sample.conf, runs it again and is ready; an after_init answering {:error, "no such user: bob"} is init's answer, with no "ready:"
+```
+
 ### 2.1 Seeding {#host-cmd-seed}
 
-**The seeds are this host's** (its name, its zone, `Ctl.App.seeds/0`, then what the app computes from this host's settings, `Ctl.AppCommands.seeds/1` when it defines one), and **anything already set in the app's configuration is left alone.** With seeds, init makes the throwaway container ready (§1), asks the app for `config list`, and for each seed whose key is at its `default` source runs `config set KEY <value>`, the value resolved ([07 §5.5](07-ctl-script.md#host-script-env-host)) and written as a literal (a string quoted). A failed set stops it there. Seeded, or with no seeds at all, it prints `"ready: ./<app>-ctl start"`.
+**The seeds are this host's** (its name, its zone, `Ctl.App.seeds/0`, then what the app computes from this host's settings, `Ctl.AppCommands.seeds/1` when it defines one), and **anything already set in the app's configuration is left alone.** With seeds, init makes the throwaway container ready (§1), asks the app for `config list`, and for each seed whose key is at its `default` source runs `config set KEY <value>`, the value resolved ([07 §5.5](07-ctl-script.md#host-script-env-host)) and written as a literal (a string quoted). A failed set stops it there. Seeded, or with no seeds at all, it goes on to the app's step (§2, step 7), and then prints `"ready: ./<app>-ctl start"`.
 
 ```test:cmd-init-seed
 with phx_host and tz at their default and phx_scheme set in config.exs, init asks list, then sets phx_host to the host's name and tz to the host's zone, each by name in SAMPLE_CTL_ARGS, and leaves phx_scheme alone

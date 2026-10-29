@@ -10,7 +10,20 @@ defmodule Ctl.Commands do
   @script <%= inspect(@script) %>
   @title <%= inspect(@title) %>
 
-  @init_usage "usage: ./#{@script} init [DIR] [--force] [--migrate]"
+  @init_flags ["--force", "--migrate"]
+  # init's usage names the app's own flags too, so a refusal says what exists.
+  defp init_usage, do: "usage: ./#{@script} init [DIR] [--force] [--migrate]" <> app_flags_usage()
+
+  @doc false
+  # The app's init flags as usage shows them: `[--quiet] [--user VALUE]`.
+  def app_flags_usage do
+    app_init_flags()
+    |> Enum.sort()
+    |> Enum.map_join(fn
+      {flag, :switch} -> " [#{flag}]"
+      {flag, :value} -> " [#{flag} VALUE]"
+    end)
+  end
 
   @doc """
   Sets up this host's data directory: asks for it (or takes `DIR`),
@@ -21,13 +34,22 @@ defmodule Ctl.Commands do
   DATA into the new directory instead of seeding; it writes `@data_dir` and
   the settings file only once the data is copied, so a failed migration
   leaves this script as it was.
+
+  The app's own flags (`Ctl.AppCommands.init_flags/0`) are taken beside
+  these, and given to `Ctl.AppCommands.after_init/2` once the directory is
+  adopted and seeded (or migrated); its answer is init's.
   """
   def init(env, args) do
-    {flags, rest} = Enum.split_with(args, &String.starts_with?(&1, "--"))
+    with {:ok, given, rest} <- init_args(args) do
+      {own, app_flags} = Map.split(given, @init_flags)
+      init(env, Map.keys(own), app_flags, rest)
+    end
+  end
 
+  defp init(env, flags, app_flags, rest) do
     cond do
-      flags -- ["--force", "--migrate"] != [] or length(rest) > 1 ->
-        {:error, @init_usage}
+      length(rest) > 1 ->
+        {:error, init_usage()}
 
       env.data_dir != nil and "--force" not in flags ->
         {:error,
@@ -42,14 +64,71 @@ defmodule Ctl.Commands do
         with :ok <- make_home(dir),
              {:ok, env} <- Ctl.Env.with_data_dir(env, dir, env.sys_values) do
           if "--migrate" in flags,
-            do: migrate(env),
-            else: init_fresh(env)
+            do: migrate(env, app_flags),
+            else: init_fresh(env, app_flags)
         end
     end
   end
 
-  defp init_fresh(env) do
-    with {:ok, env} <- adopt(env, false), do: seed_config(env)
+  # init's own flags, then the app's: a value flag takes the next argument,
+  # and no flag is given twice. An app's flag named like one of init's own
+  # is init's.
+  defp init_args(args) do
+    own = Map.new(@init_flags, &{&1, :switch})
+    init_args(args, Map.merge(app_init_flags(), own), %{}, [])
+  end
+
+  defp init_args([], _known, given, rest), do: {:ok, given, Enum.reverse(rest)}
+
+  defp init_args(["--" <> _ = flag | args], known, given, rest) do
+    cond do
+      not Map.has_key?(known, flag) ->
+        {:error, init_usage()}
+
+      Map.has_key?(given, flag) ->
+        {:error, "init takes #{flag} once"}
+
+      known[flag] == :switch ->
+        init_args(args, known, Map.put(given, flag, true), rest)
+
+      true ->
+        # The next flag is not a value: `--user --force` lacks the user.
+        case args do
+          ["--" <> _ | _] -> {:error, "init #{flag} needs a value"}
+          [value | args] -> init_args(args, known, Map.put(given, flag, value), rest)
+          [] -> {:error, "init #{flag} needs a value"}
+        end
+    end
+  end
+
+  defp init_args([dir | args], known, given, rest), do: init_args(args, known, given, [dir | rest])
+
+  # The app's flags (`Ctl.AppCommands.init_flags/0`), declared as data:
+  # `[{flag, :switch | :value}]`.
+  defp app_init_flags do
+    if function_exported?(Ctl.AppCommands, :init_flags, 0),
+      do: Map.new(apply(Ctl.AppCommands, :init_flags, []), &init_flag/1),
+      else: %{}
+  end
+
+  defp init_flag({"--" <> _ = flag, kind}) when kind in [:switch, :value], do: {flag, kind}
+
+  defp init_fresh(env, app_flags) do
+    with {:ok, env} <- adopt(env, false),
+         :ok <- seed_config(env),
+         :ok <- after_init(env, app_flags) do
+      IO.puts("ready: ./#{@script} start")
+    end
+  end
+
+  # The app's own step once the directory is adopted and seeded
+  # (`Ctl.AppCommands.after_init/2`), given its flags; its answer is init's.
+  # init can be rerun on an adopted directory, so the step must be safe to
+  # rerun.
+  defp after_init(env, app_flags) do
+    if function_exported?(Ctl.AppCommands, :after_init, 2),
+      do: apply(Ctl.AppCommands, :after_init, [env, app_flags]),
+      else: :ok
   end
 
   # Names the directory in this script and writes its settings file, then
@@ -122,11 +201,7 @@ defmodule Ctl.Commands do
 
   # The seeds are this host's (its name, its zone); anything already set in
   # the app's configuration is left alone.
-  defp seed_config(env) do
-    with :ok <- seed(env, Ctl.App.seeds() ++ app_seeds(env)) do
-      IO.puts("ready: ./#{@script} start")
-    end
-  end
+  defp seed_config(env), do: seed(env, Ctl.App.seeds() ++ app_seeds(env))
 
   # Seeds the app computes from this host's settings (`Ctl.AppCommands.seeds/1`):
   # after the description's, so the description's come first.
@@ -175,7 +250,7 @@ defmodule Ctl.Commands do
   # copy has succeeded nothing is written: the docker steps run with the
   # settings the file is about to hold, and `@data_dir` and the settings
   # file follow the copy, so a failure leaves this script as it was.
-  defp migrate(env) do
+  defp migrate(env, app_flags) do
     legacy = Ctl.Env.legacy_path(env)
 
     with {:ok, known, extra} <- Ctl.Env.read_file(legacy),
@@ -195,6 +270,8 @@ defmodule Ctl.Commands do
       migrated — check ./#{@script} config list, then ./#{@script} start.
       The old data at #{old_data} was copied, not moved: remove it once #{@title} runs.\
       """)
+
+      after_init(env, app_flags)
     end
   end
 

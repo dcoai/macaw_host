@@ -86,7 +86,7 @@ defmodule Ctl do
     """
     #{@script} — manage the #{@title} container on a deployment host.
 
-    #{line("init [DIR]", "set up this host's data directory (asks for one without DIR); --force points it elsewhere; --migrate brings an older setup")}
+    #{line("init [DIR]" <> Ctl.Commands.app_flags_usage(), "set up this host's data directory (asks for one without DIR); --force points it elsewhere; --migrate brings an older setup")}
     #{line("start", "pull if needed, then run (recreates the container)")}
     #{line("stop", "stop and remove the container (the data is untouched)")}
     #{line("restart", "stop, then start: applies changed settings")}

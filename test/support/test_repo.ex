@@ -26,3 +26,26 @@ defmodule Macaw.Host.TestRepo do
     )
   end
 end
+
+defmodule Macaw.Host.TestRepo.Probes do
+  @moduledoc """
+  The body of the test repo's one migration (version 20260101000000,
+  `test/support/repo/migrations`), compiled once with the test support.
+
+  Ecto compiles a migration file every time it runs it from a path, so two
+  tests that each migrate a fresh database from the files would define the
+  file's module twice in one VM. Only `Macaw.Host.Release.migrate/1`'s test
+  needs the files (that is what it tests); a test that only needs the
+  migration run hands Ecto this module with the version instead.
+  """
+
+  use Ecto.Migration
+
+  def version, do: 20_260_101_000_000
+
+  def change do
+    create table(:probes) do
+      add(:name, :string)
+    end
+  end
+end

@@ -59,7 +59,8 @@ test:
   extends: .elixir
   stage: test
   script:
-    - mix test
+    # A warning fails the run, test files' included (macaw_host#19).
+    - mix test --warnings-as-errors
     # Spec, tests and code aligned (macaw_compose spec/00 §4.1): the status reads this
     # job's test run as evidence, so it runs right after it, in the same job.
     - mix surfex.status

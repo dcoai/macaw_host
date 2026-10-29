@@ -130,10 +130,22 @@ defmodule Macaw.Host.Ctl.ScriptTest do
     end
 
     defmodule FakeWorld do
-      def cmd(exe, args, opts), do: send(self(), {:cmd, exe, args, opts}) && {"faked", 0}
+      def cmd(exe, args, opts) do
+        send(self(), {:cmd, exe, args, opts})
+        {"faked", 0}
+      end
+
       def sleep(ms), do: send(self(), {:sleep, ms})
-      def prompt(q), do: send(self(), {:prompt, q}) && "typed"
-      def prompt_secret(q), do: send(self(), {:prompt_secret, q}) && "hidden"
+
+      def prompt(q) do
+        send(self(), {:prompt, q})
+        "typed"
+      end
+
+      def prompt_secret(q) do
+        send(self(), {:prompt_secret, q})
+        "hidden"
+      end
     end
 
     @tag verifies: "host-script-world"
@@ -316,7 +328,8 @@ defmodule Macaw.Host.Ctl.ScriptTest do
     end
 
     @tag verifies: "host-script-env-validate"
-    test "validate/1 answers the first problem among PORT, NAME and NETWORK", %{tmp_dir: dir} do
+    test "validate/1 answers the first problem among PORT and NAME; an empty NETWORK is its default",
+         %{tmp_dir: dir} do
       assert :ok = Ctl.Env.validate(env!(dir))
 
       assert {:error, "PORT must be a port number (1–65535), not \"0\""} =
@@ -327,10 +340,10 @@ defmodule Macaw.Host.Ctl.ScriptTest do
 
       assert :ok = Ctl.Env.validate(env!(dir, %{"NAME" => "a_b.c-1", "PORT" => "65535"}))
 
-      env = env!(dir)
-
-      assert {:error, "NETWORK must be" <> _} =
-               Ctl.Env.validate(%{env | values: Map.put(env.values, "NETWORK", "")})
+      # An empty NETWORK is unset: it resolves to the default, which validates.
+      empty = env!(dir, %{"NETWORK" => ""})
+      assert Ctl.Env.get(empty, "NETWORK") == "bridge"
+      assert :ok = Ctl.Env.validate(empty)
     end
 
     @tag verifies: "host-script-env-host"

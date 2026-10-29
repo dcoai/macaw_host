@@ -133,10 +133,9 @@ setting PORT=9090 and ADMIN_PORT=9091 in "# mine\nPORT=8080\n" gives exactly "# 
 
 ### 5.4 Validation {#host-script-env-validate}
 
-`Ctl.Env.validate/1` checks the values a command is about to use, before anything is written or run, and answers the first problem:
+`Ctl.Env.validate/1` checks the values a command is about to use, before anything is written or run, and answers the first problem. It checks resolved values: an empty setting is unset and falls back to its default (§5.1), so an empty NETWORK is the default network, never an error. The checks:
 - PORT a port number, 1–65535 (`"PORT must be a port number (1–65535), not …"`);
 - NAME a valid container name, letters, digits, `_`, `.` and `-` (`"NAME must be a valid container name (letters, digits, _ . -)"`);
-- NETWORK non-empty;
 - **with `host_network: false`** ([06 §3.2](06-ctl-generator.md#host-gen-optional)), NETWORK not `host` (`"NETWORK=host is not allowed for <Title>: its listeners stay inside the container's own network"`): host networking would put every listener on the host's interfaces, a console meant for one address on all of them (macaw_host#1);
 - BIND an IP address (`"BIND must be an IP address, like 127.0.0.1 or 0.0.0.0, not …"`);
 - **with NETWORK `host`, BIND `0.0.0.0`** (`"BIND applies to a published port; with NETWORK=host <Title> listens on the host's own interfaces, so set BIND=0.0.0.0 or use a docker network"`): nothing is published there, so a narrower BIND would promise a restriction docker doesn't make (macaw_host#12);

@@ -12,6 +12,7 @@ defmodule Macaw.Host.DatabaseTest do
   import ExUnit.CaptureLog
 
   alias Macaw.Host.{Health, Release, TestRepo}
+  alias Macaw.Host.TestRepo.Probes
 
   @moduletag :tmp_dir
 
@@ -44,7 +45,12 @@ defmodule Macaw.Host.DatabaseTest do
     start_supervised!(TestRepo)
     assert Health.migrations(TestRepo) == {:error, "1 pending"}
 
-    capture_log(fn -> Ecto.Migrator.run(TestRepo, :up, all: true) end)
+    # Run as a module, not from the file: Release.migrate/1's test compiles the file (see
+    # TestRepo.Probes).
+    capture_log(fn ->
+      Ecto.Migrator.run(TestRepo, [{Probes.version(), Probes}], :up, all: true)
+    end)
+
     assert Health.migrations(TestRepo) == :ok
   end
 

@@ -170,7 +170,7 @@ defmodule Macaw.Host.Config do
   @spec put!(Path.t(), [spec()], String.t(), String.t()) :: {:ok, term()} | {:error, String.t()}
   def put!(path, specs, name, text) do
     with {:ok, {key, type}} <- lookup(specs, name),
-         {:ok, {literal, value}} <- typed(type, text),
+         {:ok, {literal, value}} <- typed(type, name, text),
          {:ok, file} <- read_file(path) do
       Literal.write!(path, Map.put(drop_key(file, key), key, literal), header())
       {:ok, value}
@@ -235,21 +235,45 @@ defmodule Macaw.Host.Config do
   #
   # An enum value is matched by its name as a string (`open` or `:open`),
   # as from an env var, so a typo is "must be one of …", never an atom.
-  defp typed({:enum, _} = type, text) do
+  defp typed({:enum, _} = type, _name, text) do
     with {:ok, value} <- Types.cast(type, String.trim_leading(String.trim(text), ":")),
          do: {:ok, {value, value}}
   end
 
-  defp typed(type, text) do
-    with {:ok, literal} <- parse_value(text),
+  defp typed(type, name, text) do
+    with {:ok, literal} <- parse_value(type, name, text),
          {:ok, value} <- Types.check(type, literal),
          do: {:ok, {literal, value}}
   end
 
-  defp parse_value(text) do
+  # A value that isn't a literal is one fault, worded alike whether or not
+  # the word is an atom the VM knows; when the setting's type takes the text
+  # as a string, the answer says to quote it (macaw#106). A secret's text is
+  # never repeated.
+  defp parse_value(type, name, text) do
     case Literal.parse_value(text) do
-      {:ok, value} -> {:ok, value}
-      {:error, faults} -> {:error, Enum.join(faults, "; ")}
+      {:ok, value} ->
+        {:ok, value}
+
+      {:error, faults} ->
+        faults =
+          Enum.map(faults, fn fault ->
+            fault = String.replace(fault, "unsafe atom does not exist: ", "not a literal: ")
+            if type == :secret, do: String.replace(fault, String.trim(text), "…"), else: fault
+          end)
+
+        {:error, Enum.join(faults, "; ") <> quoting(type, name, String.trim(text))}
+    end
+  end
+
+  defp quoting(type, name, text) do
+    case Types.check(type, text) do
+      {:ok, _} ->
+        shown = if type == :secret, do: "…", else: text
+        ~s(; a string is quoted: config set #{name} '"#{shown}"')
+
+      {:error, _} ->
+        ""
     end
   end
 

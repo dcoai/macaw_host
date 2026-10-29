@@ -219,6 +219,34 @@ defmodule Macaw.Host.ConfigTest do
       assert Literal.read!(path) == %{port: 8443, mode: :open}
     end
 
+    @tag verifies: "config-put-bare-word"
+    test "put! names what a bare word should have been, and leaves the file untouched",
+         %{tmp_dir: dir} do
+      path = Path.join(dir, "config.exs")
+      assert {:ok, 8443} = Config.put!(path, @specs, "port", "8443")
+      before = File.read!(path)
+
+      # `ok` is an atom the VM knows; the second word is spelled for this test alone, so
+      # it is no atom: the two answers read alike.
+      for word <- ["ok", "nasbox_put_bare_word_q7v"] do
+        assert {:error, why} = Config.put!(path, @specs, "public_host", word)
+        assert why =~ "not a literal: #{word}"
+        assert why =~ ~s(a string is quoted: config set public_host '"#{word}"')
+        refute why =~ "unsafe atom"
+      end
+
+      assert {:error, why} = Config.put!(path, @specs, "offset", "ok")
+      assert why =~ "not a literal: ok"
+      refute why =~ "quoted"
+
+      assert {:error, why} = Config.put!(path, @specs, "smtp_password", "hunter2xq")
+      assert why =~ ~s(a string is quoted: config set smtp_password '"…"')
+      assert why =~ "not a literal: …"
+      refute why =~ "hunter2xq"
+
+      assert File.read!(path) == before
+    end
+
     @tag verifies: "config-delete"
     test "delete! removes a key", %{tmp_dir: dir} do
       path = Path.join(dir, "config.exs")

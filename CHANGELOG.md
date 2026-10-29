@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `config set` names what a bare word should have been: "not a literal" whether or not the word is a known atom, and, when the setting's type takes the text as a string, how to quote it (spec 01 §1.6, #9, macaw#106).
 - `status` pads each level of the app's report to its widest key plus two spaces, so a key never runs into its value, and prints a list as words and nil as a dash, not JSON; `config`'s help line names `@FILE` (spec 07, spec 08 §8, #8, #7).
 
 ## v0.2.0 (2026-10-28)

@@ -179,7 +179,7 @@ The app's file holds one module, `Ctl.AppCommands`, **and nothing beside it:** a
 - **optionally `init_flags()`:** `[{flag, :switch | :value}]`, init's flags of the app's own (`[{"--user", :value}, {"--auth-file", :value}]`), declared as data; `init` takes them beside its own, and an app's flag named like one of init's own is init's ([08 §2](08-ctl-commands.md#host-cmd-init)). A malformed declaration (a flag without `--`, another kind) fails init loudly.
 - **optionally `after_init(env, flags)`:** the app's own step once `init` has adopted and seeded (or migrated) the data directory, `flags` a map of the app's flags given (`%{"--user" => "ann", "--quiet" => true}`, `%{}` for none); its answer is init's: `:ok`, `{:error, message}` or `{:halt, status}`. **It must be safe to rerun:** init can be rerun on an adopted directory (`init --force` with the same `DIR`), and calls it on every successful init. **A value flag's value reaches the app's own code here, in-process;** the script never puts it on a docker command line, and when the app passes it to a container it does so by name, as a secret ([07 §6](07-ctl-script.md#host-script-docker)), since it may be one (a file holding a bind password, say).
 - **optionally `seeds(env)`:** `[{config key, value}]`, app config `init` seeds that the app computes from this host's settings (a console URL from its bind and port), after the description's `:seeds` and by the same rule ([08 §2.1](08-ctl-commands.md#host-cmd-seed)).
-- **optionally `status_lines(env)`:** lines `status` prints with the host's (its other ports, say), after `data:` ([08 §8](08-ctl-commands.md#host-cmd-status)).
+- **optionally `status_lines(env, report)`:** lines `status` prints with the host's (its other ports, say), after `data:` ([08 §8](08-ctl-commands.md#host-cmd-status)). **`report` is the app's own report** as `status` read it (the last JSON object of `rpc <Release>.status()`, a map with string keys), so a line can say what only the running app knows (apu's plain-HTTP warning); it is `nil` when the app isn't running or didn't answer, and the line then says only what the host's settings know. The hook took only `env` before 0.3.0 (`status_lines/1`); that arity is no longer called, and the generator refuses it (below).
 
 An optional function the app doesn't define is never called, and is called through `apply/3`, so its absence compiles without a warning.
 
@@ -196,7 +196,8 @@ the sample's reset-password alice, the password answered at prompt_secret, runs 
 - its top-level modules must be `Ctl.AppCommands` or named under it (`"the app commands file may define only Ctl.AppCommands, not Ctl.Home"`), and `Ctl.AppCommands` must be among them (`"the app commands file must define Ctl.AppCommands"`);
 - **its one top-level expression is `defmodule Ctl.AppCommands`:** any other (a call, an `alias`, a literal, a submodule defined beside the module rather than inside it, a second `Ctl.AppCommands`) is refused naming the first such and its line, `"the app commands file may hold only the Ctl.AppCommands module; line N is outside it: <its first line>"` (macaw_compose#70);
 - it must define `commands/0` and `run/3` (`"Ctl.AppCommands must define run/3"`);
-- it must not set `@data_dir` on any line (`"Ctl.AppCommands must not set @data_dir: the script's one line of host state is in Ctl.Home"`).
+- it must not set `@data_dir` on any line (`"Ctl.AppCommands must not set @data_dir: the script's one line of host state is in Ctl.Home"`);
+- it must not define `status_lines/1`, the hook's arity before 0.3.0, which the script no longer calls: an app still defining it would lose its lines without a word, so it is refused when the script is generated, `"Ctl.AppCommands.status_lines/1 is now status_lines/2 (env, report)"`.
 
 `nil` is the module of no commands (§2).
 
@@ -210,6 +211,10 @@ a fixture with Ctl.AppCommands and then `alias Ctl.AppCommands` and a File.rm_rf
 
 ```test:gen-app-commands-guard
 the sample commands plus a defmodule Ctl.Home give "may define only Ctl.AppCommands, not Ctl.Home"; the sample commands with an @data_dir line give "must not set @data_dir"; an unterminated module gives "does not parse: line 1"
+```
+
+```test:gen-app-commands-status-lines
+the sample commands with status_lines(env) in place of status_lines(env, report) give exactly "Ctl.AppCommands.status_lines/1 is now status_lines/2 (env, report)" from app_commands/1, and generate/2 raises ArgumentError with that message; the sample commands as they are are accepted
 ```
 
 ```test:gen-app-last-object

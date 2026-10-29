@@ -41,7 +41,9 @@ defmodule Macaw.Host.Ctl do
   - optionally `init_flags/0` and `after_init(env, flags)`: init's own
     flags for the app, and the step after init, safe to rerun;
   - optionally `seeds(env)`: app config init seeds from this host's settings;
-  - optionally `status_lines(env)`: lines `status` prints with the host's.
+  - optionally `status_lines(env, report)`: lines `status` prints with the
+    host's, `report` the running app's own report (nil when it isn't
+    running or doesn't answer).
 
   Spec 06 §4 is the contract in full.
 
@@ -127,7 +129,8 @@ defmodule Macaw.Host.Ctl do
   one `Ctl.AppCommands` module (no other module, no code outside it,
   which would run whenever the script loads), and defines `commands/0`
   and `run/3`, so it can neither replace a generic module nor carry a
-  second `@data_dir`. nil is the module of no commands.
+  second `@data_dir`; a `status_lines/1`, the hook's old arity, is
+  refused naming `status_lines/2`. nil is the module of no commands.
   """
   @spec app_commands(String.t() | nil) :: {:ok, String.t()} | {:error, String.t()}
   def app_commands(nil), do: {:ok, @no_app_commands}
@@ -138,6 +141,7 @@ defmodule Macaw.Host.Ctl do
          :ok <- nothing_beside(source),
          :ok <- defines(ast, :commands, 0),
          :ok <- defines(ast, :run, 3),
+         :ok <- no_old_status_lines(ast),
          :ok <- no_data_dir(source) do
       {:ok, source}
     end
@@ -218,6 +222,16 @@ defmodule Macaw.Host.Ctl do
       end)
 
     if found?, do: :ok, else: {:error, "Ctl.AppCommands must define #{name}/#{arity}"}
+  end
+
+  # status_lines/1 (env only) was the hook before the app's report reached
+  # it; the script calls only status_lines/2, so an app still defining /1
+  # would lose its lines without a word. Refused here, where it is fixed.
+  defp no_old_status_lines(ast) do
+    case defines(ast, :status_lines, 1) do
+      :ok -> {:error, "Ctl.AppCommands.status_lines/1 is now status_lines/2 (env, report)"}
+      {:error, _} -> :ok
+    end
   end
 
   defp def_head?({:when, _, [head | _]}, name, arity), do: def_head?(head, name, arity)

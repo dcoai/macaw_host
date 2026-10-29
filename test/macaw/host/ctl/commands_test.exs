@@ -221,6 +221,34 @@ defmodule Macaw.Host.Ctl.CommandsTest do
              "untrusted_proxies:\n  - peer: 10.0.32.64, requests: 57\n  - peer: 10.0.0.9, requests: 21\n"
   end
 
+  @tag verifies: "cmd-status-app-lines-report"
+  test "the app's host lines read its report, and get nil when it isn't running",
+       %{script: script} do
+    Recorder.install([
+      @daemon_up,
+      @running,
+      @image_present,
+      {["docker", "exec", "sample"], {~s(a warning\n{"healthy":true,"admin_open":true}\n), 0}}
+    ])
+
+    assert {:ok, out} = run(script, ["status"])
+    assert out =~ ~r/^data:     .*\nadmin:    port 4001 \(open\)\nhealth: +healthy$/m
+
+    stopped =
+      {["docker", "container", "inspect", "sample"],
+       {~s([{"State":{"Running":false,"Status":"exited"},"Config":{"Image":"x"}}]), 0}}
+
+    Recorder.install([@daemon_up, stopped, @image_present])
+    assert {:ok, out} = run(script, ["status"])
+    assert out =~ ~r/^data:     .*\nadmin:    port 4001$/m
+    refute out =~ "(open)"
+    refute Enum.any?(Recorder.docker_calls(), &match?(["exec" | _], &1))
+
+    Recorder.install([@daemon_up, @running, @image_present, {["docker", "exec"], {"", 1}}])
+    assert {:ok, out} = run(script, ["status"])
+    assert out =~ ~r/^data:     .*\nadmin:    port 4001\napp:      not answering yet$/m
+  end
+
   @tag verifies: "cmd-start-before"
   test "start asks the app's before_start, and its refusal touches no container",
        %{script: script} do

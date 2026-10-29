@@ -238,7 +238,7 @@ the sample's note is the last line after this script recreates the container, an
 - `state:` running, docker's own status, stopped, or not created; for a container, its `image:` and `started:`;
 - `wanted:` IMAGE:TAG, `(present locally)` or `(not pulled)`;
 - **`published:` where the port is published, and who reaches it,** read from the settings the run uses (`Ctl.Env.published/1` and `reach/1`, [07 §5.1](07-ctl-script.md#host-script-env-load)): `published: 127.0.0.1:4000 (this host only)` for a loopback BIND, `0.0.0.0:4000 (every interface)`, any other address `(that address)`; with NETWORK `host`, `published: the host's own network, port 4000`. It is printed whether or not the container runs: who can reach the app is the one thing an operator must not have to infer from the argv;
-- `home:`, `settings:` (`(none yet — defaults)` when there is no `<app>.conf`), and `data:`, then the app's own host lines (`Ctl.AppCommands.status_lines/1`, when it defines one);
+- `home:`, `settings:` (`(none yet — defaults)` when there is no `<app>.conf`), and `data:`, then the app's own host lines (`Ctl.AppCommands.status_lines/2`, when it defines one, [06 §4](06-ctl-generator.md#host-gen-app-commands)). **The app's report is asked before these lines are printed** and handed to them (`nil` when the container isn't running or the app didn't answer), so a line can read it; the printed order is unchanged;
 - **when it is running, the app's own report,** asked of the running app (`rpc <Release>.status()`, [03 §4](03-release.md#host-release-status)). The report is **the last JSON object** the call prints; anything before it (a warning from the node) is not the answer. `healthy` is shown as `health: healthy` or `UNHEALTHY`, every other key in sorted order, a nested map key by key, **a list of maps one element a line** (`  - key: value, key: value`, keys sorted). **Each level's keys are padded to the widest key at that level plus two spaces,** the top level never narrower than status's own lines, so a key never runs into its value; a list of words prints joined by `, ` and `nil` as `—`, never as JSON. An app that doesn't answer is `app: not answering yet`.
 
 `status` answers `:ok` whatever the app's health.
@@ -257,6 +257,10 @@ a report with a top-level key and a nested key longer than the old widths keeps 
 
 ```test:cmd-status-app-lines
 status prints "admin:    port 4001" right after the data: line, and a report's untrusted_proxies list of two maps as "untrusted_proxies:" then "  - peer: 10.0.32.64, requests: 57" and "  - peer: 10.0.0.9, requests: 21"
+```
+
+```test:cmd-status-app-lines-report
+with a running app whose report, after a warning line, is {"healthy":true,"admin_open":true}, the sample's line is "admin:    port 4001 (open)", right after data: and before the health: line; with the container exited, status runs no exec and the line is "admin:    port 4001" alone; with a running app whose rpc fails, the line is "admin:    port 4001" and then "app:      not answering yet"
 ```
 
 ## 9. logs and shell {#host-cmd-logs}

@@ -86,6 +86,17 @@ defmodule Ctl.AppCommands do
     Process.get(:sample_after_init, :ok)
   end
 
-  @doc "The admin console's port, on status's host lines."
-  def status_lines(env), do: ["admin:    port #{Ctl.Env.get(env, "ADMIN_PORT")}"]
+  @doc """
+  The admin console's port, on status's host lines, and whether the running
+  app's report says the console is open; nothing of the report when the
+  app isn't running or didn't answer (`report` nil).
+  """
+  def status_lines(env, report) do
+    port = "admin:    port #{Ctl.Env.get(env, "ADMIN_PORT")}"
+
+    case report do
+      %{"admin_open" => true} -> [port <> " (open)"]
+      _ -> [port]
+    end
+  end
 end

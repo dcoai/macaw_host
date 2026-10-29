@@ -824,9 +824,13 @@ defmodule Ctl.Commands do
       IO.puts("home:     #{env.data_dir}")
       IO.puts("settings: #{env.path}" <> if(env.loaded?, do: "", else: " (none yet — defaults)"))
       IO.puts("data:     #{Ctl.Env.data_path(env)}")
-      Enum.each(app_status_lines(env), &IO.puts/1)
 
-      if state_of(record) == "running", do: print_app(name)
+      # Asked before the app's lines, which may read it; printed after them.
+      running? = state_of(record) == "running"
+      report = if running?, do: app_report(name)
+      Enum.each(app_status_lines(env, report), &IO.puts/1)
+
+      if running?, do: print_app(report)
 
       :ok
     end
@@ -856,11 +860,12 @@ defmodule Ctl.Commands do
       else: :ok
   end
 
-  # The app's own host lines (`Ctl.AppCommands.status_lines/1`): its other
-  # ports, say.
-  defp app_status_lines(env) do
-    if function_exported?(Ctl.AppCommands, :status_lines, 1),
-      do: apply(Ctl.AppCommands, :status_lines, [env]),
+  # The app's own host lines (`Ctl.AppCommands.status_lines/2`): its other
+  # ports, say, or what only its report knows; `report` is nil when the app
+  # isn't running or didn't answer.
+  defp app_status_lines(env, report) do
+    if function_exported?(Ctl.AppCommands, :status_lines, 2),
+      do: apply(Ctl.AppCommands, :status_lines, [env, report]),
       else: []
   end
 
@@ -877,15 +882,16 @@ defmodule Ctl.Commands do
   end
 
   # The report is the last JSON object the rpc prints; anything before it
-  # (a warning from the node) is not the answer.
-  defp print_app(name) do
-    with {out, 0} <- Ctl.Docker.run(Ctl.Docker.status_args(name), stderr_to_stdout: true),
-         %{} = report <- last_object(out) do
-      print_report(report)
-    else
-      _ -> IO.puts("app:      not answering yet")
+  # (a warning from the node) is not the answer. nil when there is none.
+  defp app_report(name) do
+    case Ctl.Docker.run(Ctl.Docker.status_args(name), stderr_to_stdout: true) do
+      {out, 0} -> last_object(out)
+      _ -> nil
     end
   end
+
+  defp print_app(nil), do: IO.puts("app:      not answering yet")
+  defp print_app(%{} = report), do: print_report(report)
 
   @doc """
   The last JSON object in a command's output, or nil: a release command may

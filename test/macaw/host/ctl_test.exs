@@ -352,6 +352,27 @@ defmodule Macaw.Host.CtlTest do
 
       assert {:ok, _} = Ctl.app_commands(nested)
     end
+
+    @tag verifies: "gen-app-commands-status-lines"
+    test "a status_lines/1, the hook's old arity, is refused naming status_lines/2" do
+      old =
+        String.replace(
+          CtlFixture.app_commands(),
+          "def status_lines(env, report) do",
+          "def status_lines(env) do\n    report = nil"
+        )
+
+      assert old != CtlFixture.app_commands()
+
+      assert {:error, "Ctl.AppCommands.status_lines/1 is now status_lines/2 (env, report)"} =
+               Ctl.app_commands(old)
+
+      assert_raise ArgumentError,
+                   "Ctl.AppCommands.status_lines/1 is now status_lines/2 (env, report)",
+                   fn -> Ctl.generate(CtlFixture.description(), old) end
+
+      assert {:ok, _} = Ctl.app_commands(CtlFixture.app_commands())
+    end
   end
 
   describe "compare/2, for --check" do

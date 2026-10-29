@@ -2,8 +2,9 @@ defmodule Macaw.Host.Health do
   @moduledoc """
   An app's health, in one shape every `<app>-ctl status` reads.
 
-  A report runs named checks. Each returns `:ok`, `{:error, detail}` (the
-  app is unhealthy) or `{:warn, detail}` (worth showing, not a failure):
+  A report runs named checks. Each returns a term: `:ok`, `{:error, detail}`
+  (the app is unhealthy) or `{:warn, detail}` (worth showing, not a
+  failure), `detail` a string for people:
 
       Macaw.Host.Health.report([
         database: fn -> Macaw.Host.Health.database(MyApp.Repo) end,
@@ -11,21 +12,33 @@ defmodule Macaw.Host.Health do
         data_dir: fn -> Macaw.Host.Health.writable(data_dir) end
       ], version: MyApp.Build.version(), build: MyApp.Build.sha())
 
-  gives
+  gives the report, its checks' results kept as the terms they are and
+  `healthy` decided from them (a warning keeps it healthy, an error
+  doesn't):
 
       %{healthy: true, version: "1.2.0", build: "3f639e84a704",
-        checks: %{database: "ok", migrations: "ok", data_dir: "ok"}}
+        checks: %{database: :ok, migrations: :ok, data_dir: :ok}}
+
+  Text is made only at the edge: `Macaw.Host.Health.to_wire/1` words each
+  result (`"ok"`, `"warning: <detail>"`, `"error: <detail>"`), and the two
+  edges that send a report, `Macaw.Host.Health.Plug` (JSON, `200` when
+  healthy and `503` when not) and `Macaw.Host.Release.status/1` (the line
+  `<app>-ctl status` reads), call it.
 
   A check that raises is reported as an error naming the exception, never
   a crash of the report: the point of a health check is to answer while
-  something is broken. The whole report answers within its deadline (5 s
-  unless `:deadline` says otherwise): the checks run side by side, each
-  given the time left, and one that misses it is reported as timed out.
-  `Macaw.Host.Health.Plug` serves the report as JSON, `200` when healthy
-  and `503` when not.
+  something is broken. A check that returns anything else (a bare string,
+  `"ok"` included) is an error naming the check: its text is never read
+  for what it might mean. The whole report answers within its deadline
+  (5 s unless `:deadline` says otherwise): the checks run side by side,
+  each given the time left, and one that misses it is reported as timed
+  out.
   """
 
-  @type check :: (-> :ok | {:error, term()} | {:warn, term()})
+  @typedoc "A check's result: a term, never text."
+  @type result :: :ok | {:warn, term()} | {:error, term()}
+
+  @type check :: (-> result())
 
   @deadline 5_000
   @reserved [:healthy, :checks]
@@ -51,11 +64,49 @@ defmodule Macaw.Host.Health do
     deadline = Keyword.get(opts, :deadline, @deadline)
     results = run_all(checks, deadline)
 
-    healthy =
-      Enum.all?(results, fn {_, r} -> r == "ok" or String.starts_with?(r, "warning: ") end)
-
-    Map.merge(%{healthy: healthy, checks: results}, Map.new(extra))
+    Map.merge(%{healthy: healthy?(results), checks: results}, Map.new(extra))
   end
+
+  @doc """
+  Whether results are healthy: none is an error (a warning is not a
+  failure, and no results are healthy). Decided from the terms alone.
+  """
+  @spec healthy?(%{optional(atom()) => result()}) :: boolean()
+  def healthy?(results), do: not Enum.any?(results, &match?({_, {:error, _}}, &1))
+
+  @doc """
+  The report as it is sent: each check's result worded as text, `"ok"`,
+  `"warning: <detail>"` or `"error: <detail>"` (a detail that is not a
+  string `inspect`ed), every other key as it is. Raises `ArgumentError`
+  for a map that isn't a report (no `:healthy` boolean or `:checks` map)
+  and for a result that isn't a check's term, naming the check: a
+  report's results are never text before this.
+  """
+  @spec to_wire(map()) :: map()
+  def to_wire(%{healthy: healthy, checks: %{} = checks} = report) when is_boolean(healthy),
+    do: %{report | checks: Map.new(checks, fn {name, r} -> {name, word(name, r)} end)}
+
+  def to_wire(other),
+    do:
+      raise(
+        ArgumentError,
+        "not a health report (a map with a :healthy boolean and a :checks map): #{inspect(other)}"
+      )
+
+  defp word(_name, :ok), do: "ok"
+  defp word(_name, {:warn, detail}), do: "warning: " <> detail(detail)
+  defp word(_name, {:error, detail}), do: "error: " <> detail(detail)
+
+  defp word(name, other),
+    do:
+      raise(
+        ArgumentError,
+        "health check #{inspect(name)}'s result is #{inspect(other)}, " <>
+          "not :ok, {:warn, detail} or {:error, detail}"
+      )
+
+  defp detail(detail) when is_binary(detail), do: detail
+  defp detail(detail), do: inspect(detail)
 
   # Each check runs in its own process, so one that raises or exits is
   # reported by its exit reason (never rescued) and the report still
@@ -70,21 +121,26 @@ defmodule Macaw.Host.Health do
     end)
     |> Map.new(fn {name, task} ->
       left = max(ends_at - System.monotonic_time(:millisecond), 0)
-      {name, result(Task.yield(task, left) || Task.shutdown(task, :brutal_kill), deadline)}
+      answer = Task.yield(task, left) || Task.shutdown(task, :brutal_kill)
+      {name, result(name, answer, deadline)}
     end)
   end
 
-  defp result({:ok, :ok}, _deadline), do: "ok"
-  defp result({:ok, {:error, detail}}, _deadline), do: "error: " <> detail(detail)
-  defp result({:ok, {:warn, detail}}, _deadline), do: "warning: " <> detail(detail)
-  defp result({:ok, other}, _deadline), do: "error: check returned #{inspect(other)}"
-  defp result({:exit, reason}, _deadline), do: "error: " <> Exception.format_exit(reason)
+  defp result(_name, {:ok, :ok}, _deadline), do: :ok
+  defp result(_name, {:ok, {:error, _} = error}, _deadline), do: error
+  defp result(_name, {:ok, {:warn, _} = warn}, _deadline), do: warn
 
-  defp result(nil, deadline),
-    do: "error: timed out (no answer within the report's #{deadline} ms)"
+  # Refused, never guessed from: a string is not a result, whatever it says.
+  defp result(name, {:ok, other}, _deadline),
+    do:
+      {:error,
+       "check #{inspect(name)} returned #{inspect(other)}, " <>
+         "not :ok, {:warn, detail} or {:error, detail}"}
 
-  defp detail(detail) when is_binary(detail), do: detail
-  defp detail(detail), do: inspect(detail)
+  defp result(_name, {:exit, reason}, _deadline), do: {:error, Exception.format_exit(reason)}
+
+  defp result(_name, nil, deadline),
+    do: {:error, "timed out (no answer within the report's #{deadline} ms)"}
 
   @doc "Whether a directory is writable, by writing and removing a probe file."
   @spec writable(Path.t()) :: :ok | {:error, String.t()}

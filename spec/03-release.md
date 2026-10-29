@@ -115,8 +115,8 @@ get "nope" gives {:error, "no setting named nope"}; set mode ":ajar" gives {:err
 
 ## 4. Status {#host-release-status}
 
-`Macaw.Host.Release.status/1` emits the running app's report (its health report, [04](04-health.md), with version and build) as one JSON line, for `bin/<app> rpc`. The script reads the last JSON object the call prints ([08 §8](08-ctl-commands.md#host-cmd-status)).
+`Macaw.Host.Release.status/1` emits the running app's report (its health report, [04](04-health.md), with version and build, and any keys of the app's own merged in) as one JSON line, for `bin/<app> rpc`: **its wire form,** each check's result worded by `Macaw.Host.Health.to_wire/1` (`"ok"`, `"warning: <detail>"`, `"error: <detail>"`, [04 §2.2](04-health.md#host-health-wire)), the same as the plug serves. A map that isn't a health report, or a result that is text rather than a check's term, raises `ArgumentError` naming it; before 0.3.0 any map was emitted as it was. The script reads the last JSON object the call prints ([08 §8](08-ctl-commands.md#host-cmd-status)).
 
 ```test:release-status
-status/1 of %{healthy: true} prints exactly one line, {"healthy":true}
+status/1 of %{healthy: true, checks: %{}} prints exactly one line, {"healthy":true,"checks":{}}; of a report with a {:warn, "1 untrusted peer"} check, the line's checks are {"proxies":"warning: 1 untrusted peer"}; a report whose result is the string "ok" raises ArgumentError naming the check, and %{healthy: true} "not a health report"
 ```

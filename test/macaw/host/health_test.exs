@@ -1,5 +1,6 @@
 defmodule Macaw.Host.HealthTest do
   use ExUnit.Case, async: true
+  use ExUnitProperties
 
   import Plug.Test
 
@@ -23,7 +24,12 @@ defmodule Macaw.Host.HealthTest do
              healthy: true,
              version: "1.0.0",
              build: "abc",
-             checks: %{data_dir: "ok", proxies: "warning: 1 untrusted peer"}
+             checks: %{data_dir: :ok, proxies: {:warn, "1 untrusted peer"}}
+           }
+
+    assert Health.to_wire(report).checks == %{
+             data_dir: "ok",
+             proxies: "warning: 1 untrusted peer"
            }
   end
 
@@ -43,7 +49,9 @@ defmodule Macaw.Host.HealthTest do
 
     report = Health.report(data_dir: fn -> Health.writable(unwritable) end)
     refute report.healthy
-    assert report.checks.data_dir =~ ~r/^error: .*a_file\/data is not writable/
+    assert {:error, detail} = report.checks.data_dir
+    assert detail =~ ~r/a_file\/data is not writable/
+    assert Health.to_wire(report).checks.data_dir =~ ~r/^error: .*a_file\/data is not writable/
   end
 
   @tag verifies: "health-isolation"
@@ -57,10 +65,23 @@ defmodule Macaw.Host.HealthTest do
       )
 
     refute report.healthy
-    assert report.checks.boom =~ "database gone"
-    assert report.checks.gone =~ "shutdown"
-    assert report.checks.odd == "error: check returned :maybe"
-    assert report.checks.fine == "ok"
+    assert {:error, boom} = report.checks.boom
+    assert boom =~ "database gone"
+    assert {:error, gone} = report.checks.gone
+    assert gone =~ "shutdown"
+
+    assert report.checks.odd ==
+             {:error, "check :odd returned :maybe, not :ok, {:warn, detail} or {:error, detail}"}
+
+    assert report.checks.fine == :ok
+
+    wire = Health.to_wire(report).checks
+    assert wire.boom == "error: " <> boom
+
+    assert wire.odd ==
+             "error: check :odd returned :maybe, not :ok, {:warn, detail} or {:error, detail}"
+
+    assert wire.fine == "ok"
   end
 
   @tag verifies: "health-detail"
@@ -72,8 +93,134 @@ defmodule Macaw.Host.HealthTest do
       )
 
     refute report.healthy
-    assert report.checks.db == "error: :econnrefused"
-    assert report.checks.peers == "warning: %{untrusted: 1}"
+    assert report.checks == %{db: {:error, :econnrefused}, peers: {:warn, %{untrusted: 1}}}
+
+    assert Health.to_wire(report).checks == %{
+             db: "error: :econnrefused",
+             peers: "warning: %{untrusted: 1}"
+           }
+  end
+
+  @tag verifies: "health-terms"
+  test "healthy is decided from the terms: a warning keeps it healthy, an error doesn't" do
+    assert Health.healthy?(%{})
+    assert Health.healthy?(%{a: :ok, b: {:warn, "noted"}})
+    refute Health.healthy?(%{a: :ok, b: {:warn, "noted"}, c: {:error, "down"}})
+
+    # A warning's or an error's detail is never read: a warn saying "error" is healthy,
+    # an error saying "ok" is not.
+    assert Health.report(w: fn -> {:warn, "error: everything"} end).healthy
+    refute Health.report(e: fn -> {:error, "ok"} end).healthy
+    refute Health.report(e: fn -> {:error, :ok} end).healthy
+  end
+
+  defp result_gen do
+    StreamData.one_of([
+      StreamData.constant(:ok),
+      StreamData.tuple({StreamData.constant(:warn), StreamData.string(:printable)}),
+      StreamData.tuple({StreamData.constant(:error), StreamData.string(:printable)}),
+      StreamData.tuple({StreamData.constant(:error), StreamData.atom(:alphanumeric)})
+    ])
+  end
+
+  @tag verifies: "health-terms"
+  property "any mix of results: healthy exactly when none is an error, the report keeping each term" do
+    check all(
+            results <-
+              StreamData.map_of(StreamData.atom(:alphanumeric), result_gen(), max_length: 6),
+            max_runs: 200
+          ) do
+      report = Health.report(Enum.map(results, fn {name, r} -> {name, fn -> r end} end))
+
+      assert report.checks == results
+      assert report.healthy == not Enum.any?(Map.values(results), &match?({:error, _}, &1))
+      assert report.healthy == Health.healthy?(results)
+
+      for {name, r} <- results do
+        wire = Health.to_wire(report).checks[name]
+
+        case r do
+          :ok -> assert wire == "ok"
+          {:warn, d} -> assert wire == "warning: " <> d
+          {:error, d} when is_binary(d) -> assert wire == "error: " <> d
+          {:error, d} -> assert wire == "error: " <> inspect(d)
+        end
+      end
+    end
+  end
+
+  @tag verifies: "health-string-refused"
+  test "a check returning a string is refused, naming the check, never read for its meaning" do
+    report =
+      Health.report(
+        legacy: fn -> "ok" end,
+        worded: fn -> "warning: 1 untrusted peer" end,
+        fine: fn -> :ok end
+      )
+
+    refute report.healthy
+
+    assert report.checks.legacy ==
+             {:error,
+              ~s(check :legacy returned "ok", not :ok, {:warn, detail} or {:error, detail})}
+
+    assert report.checks.worded ==
+             {:error,
+              ~s(check :worded returned "warning: 1 untrusted peer", not :ok, {:warn, detail} or {:error, detail})}
+
+    assert Health.to_wire(report).checks.legacy ==
+             ~s(error: check :legacy returned "ok", not :ok, {:warn, detail} or {:error, detail})
+
+    # A report whose results are already text (built by hand) is refused at the edge,
+    # naming the check, never sent as if it were worded.
+    error =
+      assert_raise ArgumentError, fn ->
+        Health.to_wire(%{healthy: true, checks: %{db: "ok"}})
+      end
+
+    assert error.message ==
+             ~s(health check :db's result is "ok", not :ok, {:warn, detail} or {:error, detail})
+
+    assert_raise ArgumentError, ~r/not a health report/, fn ->
+      Health.to_wire(%{healthy: true})
+    end
+  end
+
+  @tag verifies: "health-wire"
+  test "the edges word the terms as before: the plug's JSON and the release's status line", %{
+    tmp_dir: dir
+  } do
+    report =
+      Health.report(
+        [
+          data_dir: fn -> Health.writable(dir) end,
+          proxies: fn -> {:warn, "1 untrusted peer"} end,
+          db: fn -> {:error, :econnrefused} end
+        ],
+        version: "1.0.0"
+      )
+
+    wire = %{
+      "healthy" => false,
+      "version" => "1.0.0",
+      "checks" => %{
+        "data_dir" => "ok",
+        "proxies" => "warning: 1 untrusted peer",
+        "db" => "error: :econnrefused"
+      }
+    }
+
+    served =
+      conn(:get, "/healthz")
+      |> Health.Plug.call(Health.Plug.init(report: {Map, :new, [report]}))
+
+    assert served.status == 503
+    assert JSON.decode!(served.resp_body) == wire
+
+    out = ExUnit.CaptureIO.capture_io(fn -> Macaw.Host.Release.status(report) end)
+    assert [line] = String.split(out, "\n", trim: true)
+    assert JSON.decode!(line) == wire
+    assert line == served.resp_body
   end
 
   @tag verifies: "health-extra"
@@ -107,17 +254,19 @@ defmodule Macaw.Host.HealthTest do
 
     elapsed = System.monotonic_time(:millisecond) - started
 
-    assert report.checks.quick == "ok"
-    assert {report.checks.slow, report.checks.slower} == {"ok", "ok"}
-    assert report.checks.stuck =~ ~r/^error: timed out/
-    assert report.checks.stuck_too =~ ~r/^error: timed out/
+    assert report.checks.quick == :ok
+    assert {report.checks.slow, report.checks.slower} == {:ok, :ok}
+    wire = Health.to_wire(report).checks
+    assert {:error, "timed out" <> _} = report.checks.stuck
+    assert wire.stuck =~ ~r/^error: timed out/
+    assert wire.stuck_too =~ ~r/^error: timed out/
     refute report.healthy
     assert elapsed < 1_000
   end
 
   describe "the plug" do
     def healthy, do: %{healthy: true, checks: %{}}
-    def unhealthy, do: %{healthy: false, checks: %{db: "error: down"}}
+    def unhealthy, do: %{healthy: false, checks: %{db: {:error, "down"}}}
 
     @tag verifies: "health-plug"
     test "200 when healthy, 503 when not, as JSON; other paths pass through" do
@@ -156,7 +305,8 @@ defmodule Macaw.Host.HealthTest do
         conn(:get, "/healthz")
         |> Health.Plug.call(Health.Plug.init(report: {Map, :new, [report]}))
 
-      assert JSON.decode!(served.resp_body) == JSON.decode!(JSON.encode!(report))
+      assert JSON.decode!(served.resp_body) == JSON.decode!(JSON.encode!(Health.to_wire(report)))
+      assert JSON.decode!(served.resp_body)["checks"] == %{"data_dir" => "ok"}
 
       # What the generated script's status reads from the app's rpc.
       {script, _home} = Macaw.Host.Ctl.Recorder.home!(dir, "sample-ctl")
@@ -186,6 +336,12 @@ defmodule Macaw.Host.HealthTest do
         )
 
       assert report.checks == %{
+               fine: :ok,
+               broken: {:error, "disk full"},
+               noted: {:warn, "1 untrusted peer"}
+             }
+
+      assert Health.to_wire(report).checks == %{
                fine: "ok",
                broken: "error: disk full",
                noted: "warning: 1 untrusted peer"
@@ -204,10 +360,19 @@ defmodule Macaw.Host.HealthTest do
     end
 
     @tag verifies: "host-health-report"
-    test "report/3 maps each name to its result as text, healthy with no checks, extra merged in" do
+    test "report/3 maps each name to its result as a term, healthy with no checks, extra merged in" do
       assert Health.report([]) == %{healthy: true, checks: %{}}
 
-      assert Health.report([db: fn -> {:error, "down"} end], version: "1.0.0") == %{
+      report = Health.report([db: fn -> {:error, "down"} end], version: "1.0.0")
+
+      assert report == %{
+               healthy: false,
+               version: "1.0.0",
+               checks: %{db: {:error, "down"}}
+             }
+
+      # Worded only at the edge; every other key as it is.
+      assert Health.to_wire(report) == %{
                healthy: false,
                version: "1.0.0",
                checks: %{db: "error: down"}
@@ -235,7 +400,7 @@ defmodule Macaw.Host.HealthTest do
           end
         )
 
-      assert report.checks.where == "ok"
+      assert report.checks.where == :ok
       assert_received {:ran_in, pid, ancestors}
       refute pid == caller
       assert Process.whereis(Macaw.Host.Health.Tasks) in ancestors
@@ -252,9 +417,48 @@ defmodule Macaw.Host.HealthTest do
       assert System.monotonic_time(:millisecond) - started < 1_000
 
       assert report.checks.one ==
+               {:error, "timed out (no answer within the report's 200 ms)"}
+
+      assert Health.to_wire(report).checks.one ==
                "error: timed out (no answer within the report's 200 ms)"
 
       assert report.checks.two == report.checks.one
+    end
+
+    @tag verifies: "host-health-wire"
+    test "to_wire/1 words each result and leaves every other key; it refuses text and non-reports" do
+      report = %{
+        healthy: false,
+        version: "1.0.0",
+        notes: [%{peer: "10.0.0.9"}],
+        checks: %{a: :ok, b: {:warn, "noted"}, c: {:error, "down"}, d: {:error, {:closed, 3}}}
+      }
+
+      assert Health.to_wire(report) == %{
+               healthy: false,
+               version: "1.0.0",
+               notes: [%{peer: "10.0.0.9"}],
+               checks: %{a: "ok", b: "warning: noted", c: "error: down", d: "error: {:closed, 3}"}
+             }
+
+      # Worded once: a worded report is text, and text is refused.
+      assert_raise ArgumentError,
+                   ~r/^health check :[a-d]'s result is "(ok|warning: noted|error: [^"]+)", not :ok/,
+                   fn ->
+                     report |> Health.to_wire() |> Health.to_wire()
+                   end
+
+      for bad <- [{:warn, "x", "y"}, :error, "warning: noted", nil] do
+        assert_raise ArgumentError,
+                     ~r/health check :x's result is #{Regex.escape(inspect(bad))}/,
+                     fn ->
+                       Health.to_wire(%{healthy: true, checks: %{x: bad}})
+                     end
+      end
+
+      for bad <- [%{checks: %{}}, %{healthy: "yes", checks: %{}}, %{healthy: true, checks: []}] do
+        assert_raise ArgumentError, ~r/^not a health report/, fn -> Health.to_wire(bad) end
+      end
     end
 
     @tag verifies: "host-health-plug"

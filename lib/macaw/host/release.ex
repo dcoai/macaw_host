@@ -119,9 +119,13 @@ defmodule Macaw.Host.Release do
     end
   end
 
-  @doc "Prints the running app's report (a health map, say) as one JSON line, for `rpc`."
+  @doc """
+  Prints the running app's health report (`Macaw.Host.Health.report/3`, an
+  app's own keys merged in as it likes) as one JSON line, for `rpc`: its
+  wire form, each check's result worded as text (`Macaw.Host.Health.to_wire/1`).
+  """
   @spec status(map()) :: :ok
-  def status(report), do: emit(report)
+  def status(report), do: emit(Macaw.Host.Health.to_wire(report))
 
   @doc """
   The arguments in `<PREFIX>_CTL_ARGS`, a JSON array of strings. Fails with a

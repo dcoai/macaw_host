@@ -153,8 +153,29 @@ defmodule Macaw.Host.ReleaseTest do
 
   @tag verifies: "release-status"
   test "status emits the report as one JSON line" do
-    out = ExUnit.CaptureIO.capture_io(fn -> Release.status(%{healthy: true}) end)
-    assert out == ~s({"healthy":true}\n)
+    out = ExUnit.CaptureIO.capture_io(fn -> Release.status(%{healthy: true, checks: %{}}) end)
+    assert [line] = String.split(out, "\n", trim: true)
+    assert out == line <> "\n"
+    assert JSON.decode!(line) == %{"healthy" => true, "checks" => %{}}
+
+    # Each check's term worded as text, as the generated script's status reads it.
+    report = %{healthy: true, checks: %{proxies: {:warn, "1 untrusted peer"}}}
+    out = ExUnit.CaptureIO.capture_io(fn -> Release.status(report) end)
+    assert [line] = String.split(out, "\n", trim: true)
+
+    assert JSON.decode!(line) == %{
+             "healthy" => true,
+             "checks" => %{"proxies" => "warning: 1 untrusted peer"}
+           }
+
+    # Text in place of a term is refused, naming the check; not a report at all, too.
+    assert_raise ArgumentError, ~r/health check :db's result is "ok"/, fn ->
+      Release.status(%{healthy: true, checks: %{db: "ok"}})
+    end
+
+    assert_raise ArgumentError, ~r/not a health report/, fn ->
+      Release.status(%{healthy: true})
+    end
   end
 
   describe "in a fresh VM, as bin/app eval runs it" do
@@ -388,11 +409,12 @@ defmodule Macaw.Host.ReleaseTest do
        %{tmp_dir: dir} do
     defmodule RtSample.Release do
       def config, do: Macaw.Host.Release.config(:rt_sample, [], "RT")
-      def status, do: Macaw.Host.Release.status(%{healthy: true})
+      def status, do: Macaw.Host.Release.status(%{healthy: true, checks: %{}})
     end
 
-    assert ExUnit.CaptureIO.capture_io(fn -> RtSample.Release.status() end) ==
-             ~s({"healthy":true}\n)
+    out = ExUnit.CaptureIO.capture_io(fn -> RtSample.Release.status() end)
+    assert [line] = String.split(out, "\n", trim: true)
+    assert JSON.decode!(line) == %{"healthy" => true, "checks" => %{}}
 
     # The generated sample script names Sample.Release's two functions.
     {script, _home} = Macaw.Host.Ctl.Recorder.home!(dir, "sample-ctl")

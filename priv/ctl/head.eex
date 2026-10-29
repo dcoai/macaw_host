@@ -88,7 +88,7 @@ defmodule Ctl.App do
 
   @doc """
   The host settings and their defaults, in the order `<%= @name %>.conf`
-  lists them: the six every app has, then the app's own.
+  lists them: the seven every app has, then the app's own.
   """
   def settings, do: <%= inspect(@settings, limit: :infinity, printable_limit: :infinity) %>
 

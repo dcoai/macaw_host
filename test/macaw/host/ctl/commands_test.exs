@@ -64,7 +64,7 @@ defmodule Macaw.Host.Ctl.CommandsTest do
 
       run_argv =
         ["run", "-d", "--name", "sample", "--ulimit", "nofile=65536:65536"] ++
-          ["--network", "bridge", "-p", "4000:4000", "-v", "#{data}:/data"] ++
+          ["--network", "bridge", "-p", "127.0.0.1:4000:4000", "-v", "#{data}:/data"] ++
           ["-p", "4001:4001", "--restart", "unless-stopped", @ref]
 
       assert Recorder.docker_calls() == [
@@ -92,7 +92,7 @@ defmodule Macaw.Host.Ctl.CommandsTest do
 
       assert argv ==
                ["run", "-d", "--name", "sample", "--ulimit", "nofile=65536:65536"] ++
-                 ["--network", "bridge", "-p", "4000:4000", "-v", "#{data}:/data"] ++
+                 ["--network", "bridge", "-p", "127.0.0.1:4000:4000", "-v", "#{data}:/data"] ++
                  ["-p", "4001:4001", "--restart", "unless-stopped", @ref]
     end
 
@@ -100,11 +100,51 @@ defmodule Macaw.Host.Ctl.CommandsTest do
     test "on the host's network, the app listens on PORT itself", %{script: script} do
       Recorder.install([@daemon_up, @image_present, @owned, {["docker", "run", "-d"], {"", 0}}])
 
-      run(script, ["start"], %{"NETWORK" => "host", "PORT" => "8080"})
+      run(script, ["start"], %{"NETWORK" => "host", "PORT" => "8080", "BIND" => "0.0.0.0"})
 
       [argv] = for ["run", "-d" | _] = argv <- Recorder.docker_calls(), do: argv
       assert ["--network", "host", "-e", "PORT=8080", "-v" | _] = Enum.drop(argv, 6)
       refute "-p" in Enum.take(argv, 12)
+    end
+
+    @tag verifies: "script-docker-bind"
+    test "BIND is the address PORT is published on, an IPv6 one in brackets", %{script: script} do
+      for {bind, published} <- [
+            {"0.0.0.0", "0.0.0.0:8080:4000"},
+            {"10.0.0.5", "10.0.0.5:8080:4000"},
+            {"::1", "[::1]:8080:4000"}
+          ] do
+        Recorder.install([@daemon_up, @image_present, @owned, {["docker", "run", "-d"], {"", 0}}])
+
+        run(script, ["start"], %{"BIND" => bind, "PORT" => "8080"})
+
+        [argv] = for ["run", "-d" | _] = argv <- Recorder.docker_calls(), do: argv
+        assert ["--network", "bridge", "-p", ^published, "-v" | _] = Enum.drop(argv, 6)
+      end
+    end
+
+    @tag verifies: "script-env-bind"
+    test "BIND must be an IP address, and 0.0.0.0 on the host's network",
+         %{script: script, home: home} do
+      Recorder.install([@daemon_up, @image_present, @owned, {["docker"], {"", 0}}])
+
+      assert {{:error,
+               "BIND must be an IP address, like 127.0.0.1 or 0.0.0.0, not \"localhost\""}, _} =
+               run(script, ["start"], %{"BIND" => "localhost"})
+
+      assert {{:error, "BIND must be an IP address" <> _}, _} =
+               run(script, ["env", "set", "BIND=10.0.0"])
+
+      refute File.exists?(Path.join(home, "sample.conf"))
+
+      assert {{:error,
+               "BIND applies to a published port; with NETWORK=host Sample listens on the host's own interfaces, so set BIND=0.0.0.0 or use a docker network"},
+              _} = run(script, ["start"], %{"NETWORK" => "host"})
+
+      assert {{:error, "BIND applies to a published port" <> _}, _} =
+               run(script, ["start"], %{"NETWORK" => "host", "BIND" => "127.0.0.1"})
+
+      assert Recorder.calls() == []
     end
 
     @tag verifies: "cmd-start-last-words"
@@ -202,6 +242,23 @@ defmodule Macaw.Host.Ctl.CommandsTest do
     assert out =~ "origins:              a.example, b.example\n"
     assert out =~ "proxy:                —\n"
     assert out =~ "checks:\n  database_replication:  ok\n  db:                    ok\n"
+  end
+
+  @tag verifies: "cmd-status-published"
+  test "status prints where the port is published, and who reaches it", %{script: script} do
+    for {sys_env, line} <- [
+          {%{}, "published: 127.0.0.1:4000 (this host only)\n"},
+          {%{"BIND" => "0.0.0.0", "PORT" => "8080"},
+           "published: 0.0.0.0:8080 (every interface)\n"},
+          {%{"BIND" => "10.0.0.5"}, "published: 10.0.0.5:4000 (that address)\n"},
+          {%{"NETWORK" => "host", "BIND" => "0.0.0.0"},
+           "published: the host's own network, port 4000\n"}
+        ] do
+      Recorder.install([@daemon_up, @image_present])
+
+      assert {:ok, out} = run(script, ["status"], sys_env)
+      assert out =~ ~r/^wanted:   .*\n#{Regex.escape(line)}home:     /m
+    end
   end
 
   describe "config" do
@@ -534,7 +591,7 @@ defmodule Macaw.Host.Ctl.CommandsTest do
 
       Recorder.install([@daemon_up, @image_present, @owned, {["docker", "run", "-d"], {"", 0}}])
 
-      run(script, ["start"], %{"NETWORK" => "host", "PORT" => "8080"})
+      run(script, ["start"], %{"NETWORK" => "host", "PORT" => "8080", "BIND" => "0.0.0.0"})
 
       assert [argv] = for(["run", "-d" | _] = argv <- Recorder.docker_calls(), do: argv)
       assert ["--network", "host", "-e", "PORT=8080"] == Enum.slice(argv, 6, 4)

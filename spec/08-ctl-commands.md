@@ -85,7 +85,7 @@ init --migrate with no sample-env beside the script answers "nothing to migrate:
 `./<app>-ctl env list | get KEY | set KEY=VALUE [KEY=VALUE…] | unset KEY` edits the host settings in place (`Ctl.Commands.env/2`); `--reveal` anywhere shows secrets. Any other shape answers the usage.
 - **`list`:** every known key, `KEY=value` and where the value came from (`environment`, `file` or `default`), then every key in the file this script doesn't know, flagged `(file, unknown to <app>-ctl)`, so a typo is visible rather than silently ignored. **Secrets are masked** unless `--reveal` ([07 §4](07-ctl-script.md#host-script-secret)).
 - **`get KEY`:** the value, masked likewise; a key neither known nor in the file is `"<KEY> is not set in <path>"`.
-- **`set KEY=VALUE…`:** each pair must be `KEY=VALUE` (`"expected KEY=VALUE, got …"`) with a valid name (`"<KEY> is not a valid setting name (letters, digits and _)"`). **A key that is the app's own configuration (one `init --migrate` carried over, or one of the description's `:app_keys`) is refused with a pointer to `config`** (`"<KEY> is <Title>'s own configuration now: ./<app>-ctl config set <config key> VALUE"`). A key this script doesn't know is accepted (the file is free-form) and flagged `(not a setting <app>-ctl knows)`. The known values are **validated before anything is written** ([07 §5.4](07-ctl-script.md#host-script-env-validate)); then each is set in the file's text ([07 §5.3](07-ctl-script.md#host-script-env-edit)), the file written 0600 (a file not there yet starts as `init` would write it), `set KEY` printed for each, and `"<path> updated — ./<app>-ctl restart to apply"`. **`set` never echoes a value.**
+- **`set KEY=VALUE…`:** each pair must be `KEY=VALUE` (`"expected KEY=VALUE, got …"`) with a valid name (`"<KEY> is not a valid setting name (letters, digits and _)"`). **A key that is the app's own configuration (one `init --migrate` carried over, or one of the description's `:app_keys`) is refused with a pointer to `config`** (`"<KEY> is <Title>'s own configuration now: ./<app>-ctl config set <config key> VALUE"`). A key this script doesn't know is accepted (the file is free-form) and flagged `(not a setting <app>-ctl knows)`. The known values are **validated before anything is written** ([07 §5.4](07-ctl-script.md#host-script-env-validate): `env set BIND=0.0.0.0` widens the published port to every interface, `env set NETWORK=host` alone is refused while BIND is narrower); then each is set in the file's text ([07 §5.3](07-ctl-script.md#host-script-env-edit)), the file written 0600 (a file not there yet starts as `init` would write it), `set KEY` printed for each, and `"<path> updated — ./<app>-ctl restart to apply"`. **`set` never echoes a value.**
 - **`unset KEY`:** KEY must be a setting's name, an upper-case letter then upper-case letters, digits and `_` (`^[A-Z][A-Z0-9_]*$`), else `"<KEY, inspected> is not a valid setting name (A–Z, digits and _, starting with a letter)"` and the file untouched. It removes the key's active lines, **matched as written, never as a pattern** (the key is escaped; before macaw_compose#70 it was a regular expression, and `env unset '.*'` removed every line); when there were none, `"<KEY> is not set in <path>; nothing to do"`; else `unset KEY` and the restart line.
 
 ```test:cmd-env-list
@@ -149,7 +149,7 @@ a release answering exit status 1 makes config get nope answer {:halt, 1}
 2. **the image, pulled if missing;**
 3. **the data volume handed to the container user.** The image's user has a fixed uid and gid; when `data/` isn't already owned by that uid, **a throwaway root container of the same image** chowns it (root inside it is what docker access amounts to anyway), so **no sudo** is needed on the host. When that fails, it prints the exact line to run by hand, `sudo chown <uid>:<gid> <data>`; when `data/` can't even be created, `sudo install -d -o "$USER" <dir>`;
 4. **the container recreated, always:** an existing one is removed (`rm -f`), so every changed setting takes effect. Nothing of value lives in the container; it is all in the data directory;
-5. `docker run` ([07 §6](07-ctl-script.md#host-script-docker)); a failure is `"docker run failed: <output>"`;
+5. `docker run` ([07 §6](07-ctl-script.md#host-script-docker)), on a docker network publishing `-p BIND:PORT:<container port>`, loopback unless the description or BIND widens it; a failure is `"docker run failed: <output>"`;
 6. after two seconds, **a container still running** is reported `"<NAME> is running — ./<app>-ctl status shows <Title>'s health once it is up"`; one that exited prints **its last words** (the last 30 log lines) and answers `"<NAME> did not stay up"`.
 
 ```test:cmd-start
@@ -208,6 +208,7 @@ an unchanged image and no container: "already on the newest <ref>", nothing writ
 `./<app>-ctl status` reports what is running (`Ctl.Commands.status/2`): the data directory, docker answering, then
 - `state:` running, docker's own status, stopped, or not created; for a container, its `image:` and `started:`;
 - `wanted:` IMAGE:TAG, `(present locally)` or `(not pulled)`;
+- **`published:` where the port is published, and who reaches it,** read from the settings the run uses (`Ctl.Env.published/1` and `reach/1`, [07 §5.1](07-ctl-script.md#host-script-env-load)): `published: 127.0.0.1:4000 (this host only)` for a loopback BIND, `0.0.0.0:4000 (every interface)`, any other address `(that address)`; with NETWORK `host`, `published: the host's own network, port 4000`. It is printed whether or not the container runs: who can reach the app is the one thing an operator must not have to infer from the argv;
 - `home:`, `settings:` (`(none yet — defaults)` when there is no `<app>.conf`), and `data:`, then the app's own host lines (`Ctl.AppCommands.status_lines/1`, when it defines one);
 - **when it is running, the app's own report,** asked of the running app (`rpc <Release>.status()`, [03 §4](03-release.md#host-release-status)). The report is **the last JSON object** the call prints; anything before it (a warning from the node) is not the answer. `healthy` is shown as `health: healthy` or `UNHEALTHY`, every other key in sorted order, a nested map key by key, **a list of maps one element a line** (`  - key: value, key: value`, keys sorted). **Each level's keys are padded to the widest key at that level plus two spaces,** the top level never narrower than status's own lines, so a key never runs into its value; a list of words prints joined by `, ` and `nil` as `—`, never as JSON. An app that doesn't answer is `app: not answering yet`.
 
@@ -215,6 +216,10 @@ an unchanged image and no container: "already on the newest <ref>", nothing writ
 
 ```test:cmd-status
 with a running container whose rpc prints "a warning" and then {"healthy":true,"version":"1.2.0","checks":{"database":"ok"}}: the last call is exec sample /app/bin/sample rpc Sample.Release.status(), and the output has "state:    running", "home:     <home>", "health:   healthy", "version:  1.2.0" and "checks:" with "  database:" "ok"
+```
+
+```test:cmd-status-published
+status prints "published: 127.0.0.1:4000 (this host only)" by default, "published: 0.0.0.0:8080 (every interface)" with BIND 0.0.0.0 and PORT 8080, "published: 10.0.0.5:4000 (that address)" with BIND 10.0.0.5, and "published: the host's own network, port 4000" with NETWORK host and BIND 0.0.0.0, each right after the wanted: line and before home:
 ```
 
 ```test:cmd-status-layout
@@ -245,6 +250,7 @@ shell's last call is {"docker", ["exec", "-it", "sample", "/bin/sh"], [tty: true
 The generated script assumes these of the app, its image and its CI; `macaw_host` doesn't enforce them, and each app's own spec and pipeline hold them (the deployable-containers pattern):
 - **The script ships inside the image:** copied to `/app/<app>-ctl`, with a `bin/ctl` that prints it. **The image has no ENTRYPOINT** (an inherited one cleared with `ENTRYPOINT []`), so `docker run --rm IMAGE bin/ctl > <app>-ctl` extracts the copy that matches the image, and `eval_args/3` can run the release.
 - **The image's runtime user has the fixed uid and gid** the description's `:uid` names.
+- **An app reached from another host says so:** the published port is loopback unless the description's `:bind` widens it ([06 §3.2](06-ctl-generator.md#host-gen-optional)), so an app whose proxy is on another host states `bind: "0.0.0.0"` (or its hosts set BIND).
 - **The release module** (`:release`) defines `config/0` and `status/0` on `Macaw.Host.Release`'s protocol ([03](03-release.md)), and the app's own commands' functions likewise; its start script is `:release_bin`.
 - **The app reads its data directory** (`:data_dir` in its environment, the container's `:container_data`), loads its settings with `Macaw.Host.Config` (env var > `config.exs` > default), and generates its secrets there with `Macaw.Host.Secrets`.
 - **CI:**

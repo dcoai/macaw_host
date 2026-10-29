@@ -196,8 +196,8 @@ defmodule Macaw.Host.Ctl.ScriptTest do
     end
 
     @tag verifies: "host-script-env"
-    test "the host settings are the six every script has, then the app's own" do
-      assert Ctl.Env.keys() == ~w(PORT NETWORK IMAGE TAG NAME DOCKER_RUN_ARGS ADMIN_PORT)
+    test "the host settings are the seven every script has, then the app's own" do
+      assert Ctl.Env.keys() == ~w(PORT NETWORK BIND IMAGE TAG NAME DOCKER_RUN_ARGS ADMIN_PORT)
       assert Ctl.Env.keys() == Enum.map(Ctl.App.settings(), &elem(&1, 0))
     end
 
@@ -433,7 +433,7 @@ defmodule Macaw.Host.Ctl.ScriptTest do
                "--network",
                "backend",
                "-p",
-               "8080:4000" | _
+               "127.0.0.1:8080:4000" | _
              ] =
                Ctl.Docker.run_args(net)
 

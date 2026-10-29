@@ -33,6 +33,7 @@ defmodule Macaw.Host.Ctl.Description do
   | `:release_bin` | `"/app/bin/<otp_app>"` | the release's start script in the image |
   | `:tag` | `"latest"` | the default TAG |
   | `:network` | `"bridge"` | the default NETWORK; `"host"` shares the host's |
+  | `:bind` | `"127.0.0.1"` | the default BIND, the host address PORT is published on; `"0.0.0.0"` is every interface, and must be with `network: "host"` |
   | `:container_data` | `"/data"` | where the data volume is mounted |
   | `:docker_run_args` | `"--restart unless-stopped"` | the default DOCKER_RUN_ARGS |
   | `:stop_timeout` | `30` | seconds `stop` gives the app |
@@ -56,6 +57,7 @@ defmodule Macaw.Host.Ctl.Description do
     :release_bin,
     :tag,
     :network,
+    :bind,
     :container_data,
     :docker_run_args,
     :stop_timeout,
@@ -69,7 +71,7 @@ defmodule Macaw.Host.Ctl.Description do
     :output
   ]
 
-  @core_settings ~w(PORT NETWORK IMAGE TAG NAME DOCKER_RUN_ARGS)
+  @core_settings ~w(PORT NETWORK BIND IMAGE TAG NAME DOCKER_RUN_ARGS)
 
   @type t :: %{atom() => term()}
 
@@ -146,6 +148,7 @@ defmodule Macaw.Host.Ctl.Description do
           release_bin: "/app/bin/#{otp_app}",
           tag: "latest",
           network: "bridge",
+          bind: "127.0.0.1",
           container_data: "/data",
           docker_run_args: "--restart unless-stopped",
           stop_timeout: 30,
@@ -162,6 +165,7 @@ defmodule Macaw.Host.Ctl.Description do
       )
 
     with :ok <- check_optional(d),
+         :ok <- check_bind(d),
          :ok <- check_settings(d.settings),
          :ok <- check_app_keys(d.app_keys, core_settings(d) ++ d.settings) do
       [uid, gid] = d.uid |> String.split(":") |> Enum.map(&String.to_integer/1)
@@ -184,6 +188,7 @@ defmodule Macaw.Host.Ctl.Description do
       {:release_bin, d.release_bin, &absolute?/1, "an absolute path"},
       {:tag, d.tag, &nonempty?/1, "a string"},
       {:network, d.network, &nonempty?/1, "\"host\" or a docker network's name"},
+      {:bind, d.bind, &ip?/1, "an IP address as a string, like \"127.0.0.1\" or \"0.0.0.0\""},
       {:container_data, d.container_data, &absolute?/1, "an absolute path"},
       {:docker_run_args, d.docker_run_args, &is_binary/1, "a string"},
       {:stop_timeout, d.stop_timeout, &(is_integer(&1) and &1 >= 0), "seconds, an integer"},
@@ -227,7 +232,17 @@ defmodule Macaw.Host.Ctl.Description do
     end)
   end
 
-  # The six settings every script has, each with the sentence that explains
+  # On the host's network nothing is published: the app listens on the
+  # host's own interfaces, and a script whose default BIND is any other
+  # address would refuse its own defaults.
+  defp check_bind(%{network: "host", bind: bind}) when bind != "0.0.0.0",
+    do:
+      {:error,
+       ":ctl :bind must be \"0.0.0.0\" with network: \"host\", which publishes no port, not #{inspect(bind)}"}
+
+  defp check_bind(_d), do: :ok
+
+  # The seven settings every script has, each with the sentence that explains
   # it in `<name>.conf`.
   defp core_settings(d) do
     [
@@ -236,6 +251,9 @@ defmodule Macaw.Host.Ctl.Description do
       {"NETWORK", d.network,
        "host shares the host's network: #{d.title} listens on PORT directly. Any other value\n" <>
          "is a docker network to join, with PORT published to the container's #{d.port}."},
+      {"BIND", d.bind,
+       "The address PORT is published on. 127.0.0.1 keeps #{d.title} on this host (a proxy\n" <>
+         "on the same host reaches it); 0.0.0.0 publishes it on every interface."},
       {"IMAGE", d.image, "The image, its tag, and the container's name."},
       {"TAG", d.tag, ""},
       {"NAME", d.name, ""},
@@ -255,6 +273,10 @@ defmodule Macaw.Host.Ctl.Description do
 
   defp ids?(v), do: is_binary(v) and Regex.match?(~r/^\d+:\d+$/, v)
   defp port?(v), do: is_integer(v) and v in 1..65_535
+
+  defp ip?(v),
+    do: is_binary(v) and match?({:ok, _}, :inet.parse_strict_address(String.to_charlist(v)))
+
   defp absolute?(v), do: is_binary(v) and String.starts_with?(v, "/")
 
   defp app_keys?(keys) do

@@ -94,13 +94,14 @@ ctl: [
 | `:release_bin` | `"/app/bin/<otp_app>"` | the release's start script in the image (an absolute path) |
 | `:tag` | `"latest"` | the default TAG |
 | `:network` | `"bridge"` | the default NETWORK; `"host"` shares the host's |
+| `:bind` | `"127.0.0.1"` | the default BIND, the host address PORT is published on ([07 §6](07-ctl-script.md#host-script-docker)); an IP address as a string. **Loopback by default:** a proxy on the same host reaches the app and nothing else does. An app that must be reached from another host widens it here (`bind: "0.0.0.0"`, every interface), or the operator sets BIND. With `network: "host"` it must be `"0.0.0.0"`, since nothing is published |
 | `:container_data` | `"/data"` | where the data volume is mounted (an absolute path) |
 | `:docker_run_args` | `"--restart unless-stopped"` | the default DOCKER_RUN_ARGS |
 | `:stop_timeout` | `30` | seconds `stop` gives the app (an integer, 0 or more) |
 | `:data_home` | `"/srv/<name>"` | the data directory `init` offers (an absolute path) |
 | `:seeds` | `[]` | app config `init` seeds: `[tz: :timezone, phx_host: :hostname, phx_scheme: "http"]`, each a lower-case config key and `:hostname`, `:timezone` or a literal (a string, integer or atom) |
 | `:migrate_keys` | `[]` | `{"OLD_KEY", "config_key", old default}` that `init --migrate` carries from `<name>-env`, the old default `nil`, `:hostname`, `:timezone` or a string |
-| `:settings` | `[]` | the app's own host settings, `{"KEY", "default", "help"}`, the key upper-case and not one of the six every script has |
+| `:settings` | `[]` | the app's own host settings, `{"KEY", "default", "help"}`, the key upper-case and not one of the seven every script has |
 | `:host_network` | `true` | `false` refuses `NETWORK=host` ([07 §5.4](07-ctl-script.md#host-script-env-validate)), for an app whose listeners must stay off the host's interfaces (a console bound inside the container) |
 | `:app_keys` | `[]` | `{"KEY", "config_key"}`: a name that is the app's own configuration, which `env set` refuses with a pointer to `config set` ([08 §3](08-ctl-commands.md#host-cmd-env)); KEY upper-case, never a host setting |
 | `:app_commands` | `"ctl/app_commands.ex"` | the file defining `Ctl.AppCommands`, or `false` for none |
@@ -112,12 +113,17 @@ Checked in this order, the first fault answered:
 - **no `:ctl` key:** `"mix.exs has no :ctl key in its project config (see Macaw.Host.Ctl.Description)"`; not a keyword list or map: `":ctl must be a keyword list, not …"`;
 - **any key it doesn't know:** `":ctl has unknown keys: :prot"`. A misspelled optional key silently taking its default is the bug this refuses;
 - **every missing required key,** named together: `":ctl is missing :release, :uid"`;
-- **a value of the wrong shape:** `":ctl :uid must be \"uid:gid\", both numbers, not \"app\""`, and likewise for each key of §3.1 and §3.2;
-- **a setting that redefines one of the six:** `":ctl :settings cannot redefine PORT, which every script has"`; a setting key that isn't upper-case, or an entry that isn't `{"KEY", "default", "help"}`, is named too;
+- **a value of the wrong shape:** `":ctl :uid must be \"uid:gid\", both numbers, not \"app\""`, and likewise for each key of §3.1 and §3.2 (`:bind` is an address `:inet.parse_strict_address/1` takes: `":ctl :bind must be an IP address as a string, like \"127.0.0.1\" or \"0.0.0.0\", not \"localhost\""`);
+- **a `:bind` other than `"0.0.0.0"` with `network: "host"`:** `":ctl :bind must be \"0.0.0.0\" with network: \"host\", which publishes no port, not \"127.0.0.1\""`. The app listens on the host's own interfaces there, and the script would refuse its own defaults ([07 §5.4](07-ctl-script.md#host-script-env-validate)), so a host-network app states `bind: "0.0.0.0"`;
+- **a setting that redefines one of the seven:** `":ctl :settings cannot redefine PORT, which every script has"`; a setting key that isn't upper-case, or an entry that isn't `{"KEY", "default", "help"}`, is named too;
 - **an app key that names a host setting:** `":ctl :app_keys names ADMIN_PORT, which is a host setting"` (`env set` would refuse the setting it edits).
 
 ```test:gen-description-faults
 missing :release and :uid gives ":ctl is missing :release, :uid"; an extra prot: 1 gives ":ctl has unknown keys: :prot"; uid "app" gives the message above; a PORT setting gives the redefine message; nil gives the no-:ctl message
+```
+
+```test:gen-description-bind
+bind "localhost" gives ":ctl :bind must be an IP address as a string, like \"127.0.0.1\" or \"0.0.0.0\", not \"localhost\"" and a tuple is refused likewise; network "host" without :bind gives the host-network message; network "host" with bind "0.0.0.0" is accepted; bind "::1" is the BIND setting's default
 ```
 
 ### 3.4 What the templates are given {#host-gen-derived}
@@ -126,12 +132,13 @@ Beside the filled-in keys, the checked description holds:
 - `:script`, `"<name>-ctl"`;
 - `:ids`, `{uid, gid}` as integers;
 - `:otp_app` as a string, and `:seeds` with string keys;
-- `:settings`, **the six every script has, then the app's own,** each with the sentence that explains it in `<name>.conf`:
+- `:settings`, **the seven every script has, then the app's own,** each with the sentence that explains it in `<name>.conf`:
 
 | Key | Default | |
 |---|---|---|
 | `PORT` | the `:port` | the web port |
 | `NETWORK` | the `:network` | `host` shares the host's network; any other value is a docker network to join, PORT published to the container's port |
+| `BIND` | the `:bind` | the address PORT is published on: 127.0.0.1 keeps the app on this host (a proxy on the same host reaches it), 0.0.0.0 publishes it on every interface |
 | `IMAGE` | the `:image` | the image, its tag and the container's name |
 | `TAG` | the `:tag` | |
 | `NAME` | the `:name` | |
@@ -142,7 +149,7 @@ host_network "no" gives ":ctl :host_network must be true or false, not \"no\""; 
 ```
 
 ```test:gen-defaults
-new/2 of the sample description without settings, with otp_app :sample_web: title "Sample", release_bin "/app/bin/sample_web", tag "latest", network "bridge", data_home "/srv/sample", app_commands "ctl/app_commands.ex", output "container/sample-ctl", script "sample-ctl", ids {2060, 2060}, and the settings' keys PORT NETWORK IMAGE TAG NAME DOCKER_RUN_ARGS
+new/2 of the sample description without settings, with otp_app :sample_web: title "Sample", release_bin "/app/bin/sample_web", tag "latest", network "bridge", bind "127.0.0.1", data_home "/srv/sample", app_commands "ctl/app_commands.ex", output "container/sample-ctl", script "sample-ctl", ids {2060, 2060}, and the settings' keys PORT NETWORK BIND IMAGE TAG NAME DOCKER_RUN_ARGS
 ```
 
 ```test:gen-description-values

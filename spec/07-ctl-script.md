@@ -86,17 +86,23 @@ Ctl.Secret.mask/1 of nil and "" is "unset"; of "abcde", "abcdefghi", 15 x's and 
 
 ## 5. Host settings {#host-script-env}
 
-`Ctl.Env` is the host settings: what docker needs to run the container, and nothing the application itself uses (that is `config`, on the data volume). The keys are `Ctl.App.settings/0`'s, in order: the six every script has, then the app's own ([06 §3.4](06-ctl-generator.md#host-gen-derived)). `Ctl.Env.keys/0` is them.
+`Ctl.Env` is the host settings: what docker needs to run the container, and nothing the application itself uses (that is `config`, on the data volume). The keys are `Ctl.App.settings/0`'s, in order: the seven every script has, then the app's own ([06 §3.4](06-ctl-generator.md#host-gen-derived)). `Ctl.Env.keys/0` is them.
+
+**BIND, the address PORT is published on, defaults to the description's `:bind`, `127.0.0.1` unless the app widens it** ([06 §3.2](06-ctl-generator.md#host-gen-optional)). The default is closed: a wrong-open default exposes the app to the network silently, a wrong-closed one is loud (the app doesn't answer from another host). An operator whose proxy is on another host sets `BIND=0.0.0.0` or the proxy-facing address.
+
+```test:script-bind-default
+the sample script, generated without :bind, has BIND 127.0.0.1 among its settings; a script generated with bind: "0.0.0.0", run as a program, lists BIND=0.0.0.0 (default)
+```
 
 ### 5.1 Loading and resolution {#host-script-env-load}
 
 - `Ctl.Env.load/2` takes the script's path and the process environment. **The data directory** is the script file's `@data_dir` line (§2; a script not on disk, a test's, uses the compiled one), unless `<PREFIX>_DATA_DIR` is set non-empty, which wins.
 - `Ctl.Env.with_data_dir/3` reads `<data_dir>/<app>.conf` (when there is a directory and the file exists) and **resolves each key: the environment, then the file, then the built-in default, each beating the one before.** **A value that is empty counts as unset** at every level.
 - The loaded settings also hold: the file's own values and its keys this script doesn't know (kept, in file order); which keys the environment set; whether the file exists (`loaded?`); and whether this run was handed an update (`<PREFIX>_CTL_SELF_UPDATED` is `"1"`, [08 §7](08-ctl-commands.md#host-cmd-update)).
-- `Ctl.Env.get/2` is a key's value; `Ctl.Env.source/2` where it came from, `:environment`, `:file` or `:default`; `Ctl.Env.ref/1` is `IMAGE:TAG`; `Ctl.Env.data_path/1` is `<data_dir>/data`; `Ctl.Env.legacy_path/1` is an older script's settings file beside the script, `<app>-env`; `Ctl.Env.host_network?/1` is NETWORK `host`; `Ctl.Env.app_keys/0` maps the `:migrate_keys`' old keys to their config keys.
+- `Ctl.Env.get/2` is a key's value; `Ctl.Env.source/2` where it came from, `:environment`, `:file` or `:default`; `Ctl.Env.ref/1` is `IMAGE:TAG`; `Ctl.Env.data_path/1` is `<data_dir>/data`; `Ctl.Env.legacy_path/1` is an older script's settings file beside the script, `<app>-env`; `Ctl.Env.host_network?/1` is NETWORK `host`; `Ctl.Env.published/1` is `BIND:PORT`, an IPv6 address in brackets (`[::1]:4000`); `Ctl.Env.reach/1` is who reaches the published port, `:this_host` for a loopback BIND, `:every_interface` for `0.0.0.0` or `::`, `:that_address` for any other; `Ctl.Env.app_keys/0` maps the `:migrate_keys`' old keys to their config keys.
 
 ```test:script-env-sources
-with PORT=8080 in the file and nothing else: env list shows PORT=8080 (file) and ADMIN_PORT=4001 (default); with NETWORK=host and PORT=8080 in the environment, start runs on the host's network on 8080
+with PORT=8080 in the file and nothing else: env list shows PORT=8080 (file) and ADMIN_PORT=4001 (default); with NETWORK=host, PORT=8080 and BIND=0.0.0.0 in the environment, start runs on the host's network on 8080
 ```
 
 ### 5.2 The settings file {#host-script-env-file}
@@ -132,6 +138,8 @@ setting PORT=9090 and ADMIN_PORT=9091 in "# mine\nPORT=8080\n" gives exactly "# 
 - NAME a valid container name, letters, digits, `_`, `.` and `-` (`"NAME must be a valid container name (letters, digits, _ . -)"`);
 - NETWORK non-empty;
 - **with `host_network: false`** ([06 §3.2](06-ctl-generator.md#host-gen-optional)), NETWORK not `host` (`"NETWORK=host is not allowed for <Title>: its listeners stay inside the container's own network"`): host networking would put every listener on the host's interfaces, a console meant for one address on all of them (macaw_host#1);
+- BIND an IP address (`"BIND must be an IP address, like 127.0.0.1 or 0.0.0.0, not …"`);
+- **with NETWORK `host`, BIND `0.0.0.0`** (`"BIND applies to a published port; with NETWORK=host <Title> listens on the host's own interfaces, so set BIND=0.0.0.0 or use a docker network"`): nothing is published there, so a narrower BIND would promise a restriction docker doesn't make (macaw_host#12);
 - then **the app's own checks,** `Ctl.AppCommands.validate/1` when it defines one ([06 §4](06-ctl-generator.md#host-gen-app-commands)), its answer the answer.
 
 ```test:script-env-host-network
@@ -140,6 +148,10 @@ a script generated with host_network: false, run as a program, answers env set N
 
 ```test:script-env-validate
 env set PORT=70000 is refused with the PORT message and the file is unchanged; start with NAME "bad name" in the environment answers the NAME message and runs no docker command
+```
+
+```test:script-env-bind
+start with BIND "localhost" answers the BIND message; env set BIND=10.0.0 is refused and writes no file; start with NETWORK=host and BIND unset or 127.0.0.1 answers the NETWORK=host message; none runs a docker command
 ```
 
 ### 5.5 This host {#host-script-env-host}
@@ -168,18 +180,22 @@ What `init` seeds and `init --migrate` defaults to:
 | `Ctl.Docker.logs_args/2` | `logs -f --tail 100 NAME` to follow, `logs --tail N NAME` for the last N |
 | `Ctl.Docker.exec_args/3` | `exec [-it] NAME COMMAND…` |
 
-- **The network:** on `host`, `--network host -e PORT=<PORT>`, and the app listens on PORT itself; on any other network, `--network NETWORK -p <PORT>:<container port>`.
+- **The network:** on `host`, `--network host -e PORT=<PORT>`, and the app listens on PORT itself; on any other network, `--network NETWORK -p <BIND>:<PORT>:<container port>` (`Ctl.Env.published/1`), so by default only this host reaches the published port.
 - **The ulimit is always set:** docker's own unbounded open-file limit reaches the container as about a billion, and the BEAM sizes its port table from it, reserving gigabytes at boot.
 - **`eval_args/3`** runs a throwaway container of the image as the container user with the data volume mounted, so it works whether the app runs or not. A variable whose value is `nil` is left out.
 - **An `rpc` runs in the app's own node,** which doesn't see this command's environment: nothing secret is passed that way.
 - Queries: `ensure_available/0` (`docker info`: `:ok`; on 127 `"docker is not installed or not on PATH"`; otherwise `"cannot talk to the docker daemon — is it running, and are you in the docker group?"`), `have_image?/1`, `image_id/1` (or `nil`), `inspect_container/1` (the record, or `:none`), `container_exists?/1`, `container_running?/1`, `pull/2` (streamed; on failure `"could not pull <ref> — is 'docker login <registry>' done on this host?"`, the registry being the image's first path part), `remove_container/1` (`rm -f NAME`), `last_words/1` (`logs --tail 30 NAME`), `extract_ctl/1` (`run --rm IMAGE:TAG bin/ctl`, its stdout only, or `nil`).
 
 ```test:script-docker-start
-start on bridge runs exactly: run -d --name sample --ulimit nofile=65536:65536 --network bridge -p 4000:4000 -v <data>:/data -p 4001:4001 --restart unless-stopped registry.example/acme/sample:latest
+start on bridge runs exactly: run -d --name sample --ulimit nofile=65536:65536 --network bridge -p 127.0.0.1:4000:4000 -v <data>:/data -p 4001:4001 --restart unless-stopped registry.example/acme/sample:latest
 ```
 
 ```test:script-docker-host
-start with NETWORK host and PORT 8080: the run argv has --network host -e PORT=8080 and no -p before the volume
+start with NETWORK host, PORT 8080 and BIND 0.0.0.0: the run argv has --network host -e PORT=8080 and no -p before the volume
+```
+
+```test:script-docker-bind
+start with PORT 8080 and BIND 0.0.0.0, 10.0.0.5 and ::1 in the environment publishes -p 0.0.0.0:8080:4000, -p 10.0.0.5:8080:4000 and -p [::1]:8080:4000, each right after --network bridge
 ```
 
 ```test:script-docker-by-name

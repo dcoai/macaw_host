@@ -690,8 +690,8 @@ defmodule Ctl.Commands do
   end
 
   @doc """
-  What is running: the container and its image, where the settings and
-  data are, and, when it is up, the app's own report (`<Release>.status()`:
+  What is running: the container and its image, where its port is
+  published, where the settings and data are, and, when it is up, the app's own report (`<Release>.status()`:
   its health, version and build).
   """
   def status(env, _args) do
@@ -708,6 +708,7 @@ defmodule Ctl.Commands do
         "wanted:   #{ref} " <> if(Ctl.Docker.have_image?(ref), do: "(present locally)", else: "(not pulled)")
       )
 
+      IO.puts("published: " <> published(env))
       IO.puts("home:     #{env.data_dir}")
       IO.puts("settings: #{env.path}" <> if(env.loaded?, do: "", else: " (none yet — defaults)"))
       IO.puts("data:     #{Ctl.Env.data_path(env)}")
@@ -716,6 +717,21 @@ defmodule Ctl.Commands do
       if state_of(record) == "running", do: print_app(name)
 
       :ok
+    end
+  end
+
+  # Where the port is published, read from the settings the run uses: who
+  # can reach the app is the one thing an operator must not have to infer.
+  defp published(env) do
+    if Ctl.Env.host_network?(env) do
+      "the host's own network, port #{Ctl.Env.get(env, "PORT")}"
+    else
+      Ctl.Env.published(env) <>
+        case Ctl.Env.reach(env) do
+          :this_host -> " (this host only)"
+          :every_interface -> " (every interface)"
+          :that_address -> " (that address)"
+        end
     end
   end
 

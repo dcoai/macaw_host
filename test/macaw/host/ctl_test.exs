@@ -184,6 +184,52 @@ defmodule Macaw.Host.CtlTest do
                Description.new(CtlFixture.description())
     end
 
+    @tag verifies: "gen-description-bind"
+    test ":bind is an IP address, 0.0.0.0 with network: \"host\"" do
+      put = &Keyword.put(CtlFixture.description(), &1, &2)
+
+      assert {:error,
+              ":ctl :bind must be an IP address as a string, like \"127.0.0.1\" or \"0.0.0.0\", not \"localhost\""} =
+               Description.new(put.(:bind, "localhost"))
+
+      assert {:error, ":ctl :bind must be an IP address" <> _} =
+               Description.new(put.(:bind, {127, 0, 0, 1}))
+
+      assert {:error,
+              ":ctl :bind must be \"0.0.0.0\" with network: \"host\", which publishes no port, not \"127.0.0.1\""} =
+               Description.new(put.(:network, "host"))
+
+      assert {:ok, %{bind: "0.0.0.0"}} =
+               CtlFixture.description()
+               |> Keyword.merge(network: "host", bind: "0.0.0.0")
+               |> Description.new()
+
+      assert {:ok, %{settings: settings}} = Description.new(put.(:bind, "::1"))
+      assert {"BIND", "::1", _} = List.keyfind(settings, "BIND", 0)
+    end
+
+    @tag verifies: "script-bind-default"
+    @tag :tmp_dir
+    test "a description's :bind is the script's default BIND", %{tmp_dir: dir} do
+      home = Path.join(dir, "home")
+      File.mkdir_p!(home)
+      open = Path.join(dir, "open-ctl")
+
+      File.write!(
+        open,
+        CtlFixture.description()
+        |> Keyword.put(:bind, "0.0.0.0")
+        |> Ctl.generate(CtlFixture.app_commands())
+        |> Elixir.Ctl.Script.put_data_dir(home)
+      )
+
+      assert {out, 0} = System.cmd("elixir", [open, "env", "list"], stderr_to_stdout: true)
+      assert out =~ ~r/^BIND=0\.0\.0\.0\s+\(default\)$/m
+
+      # The sample script, generated without :bind, publishes on loopback.
+      assert {"BIND", "127.0.0.1", _} = List.keyfind(Elixir.Ctl.App.settings(), "BIND", 0)
+    end
+
     @tag verifies: "gen-defaults"
     test "fills in the defaults" do
       {:ok, d} = Description.new(Keyword.drop(CtlFixture.description(), [:settings]), :sample_web)
@@ -193,6 +239,7 @@ defmodule Macaw.Host.CtlTest do
                release_bin: "/app/bin/sample_web",
                tag: "latest",
                network: "bridge",
+               bind: "127.0.0.1",
                data_home: "/srv/sample",
                app_commands: "ctl/app_commands.ex",
                output: "container/sample-ctl",
@@ -201,7 +248,7 @@ defmodule Macaw.Host.CtlTest do
              } = d
 
       assert Enum.map(d.settings, &elem(&1, 0)) ==
-               ~w(PORT NETWORK IMAGE TAG NAME DOCKER_RUN_ARGS)
+               ~w(PORT NETWORK BIND IMAGE TAG NAME DOCKER_RUN_ARGS)
     end
 
     @tag verifies: "gen-generate-raises"
@@ -527,10 +574,10 @@ defmodule Macaw.Host.CtlTest do
     end
 
     @tag verifies: "host-gen-derived"
-    test "the checked description derives the script, the ids, string keys and the six settings first" do
+    test "the checked description derives the script, the ids, string keys and the seven settings first" do
       {:ok, d} =
         CtlFixture.description()
-        |> Keyword.merge(network: "host", tag: "1.2", docker_run_args: "--rm")
+        |> Keyword.merge(network: "host", bind: "0.0.0.0", tag: "1.2", docker_run_args: "--rm")
         |> Description.new(:sample_web)
 
       assert d.script == "sample-ctl"
@@ -541,6 +588,7 @@ defmodule Macaw.Host.CtlTest do
       assert [
                {"PORT", "4000", port_help},
                {"NETWORK", "host", network_help},
+               {"BIND", "0.0.0.0", bind_help},
                {"IMAGE", "registry.example/acme/sample", image_help},
                {"TAG", "1.2", _},
                {"NAME", "sample", _},
@@ -551,6 +599,11 @@ defmodule Macaw.Host.CtlTest do
       assert port_help =~ "web port"
       assert network_help =~ "host shares the host's network"
       assert network_help =~ "docker network to join"
+
+      assert bind_help =~
+               "127.0.0.1 keeps Sample on this host (a proxy\non the same host reaches it)"
+
+      assert bind_help =~ "0.0.0.0 publishes it on every interface"
       assert image_help =~ "The image, its tag"
       assert run_help =~ "Extra arguments for `docker run`"
 

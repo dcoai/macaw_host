@@ -41,7 +41,7 @@ defmodule Macaw.Host.Ctl.RecorderTest do
              ["container", "inspect", "sample"],
              ["rm", "-f", "sample"],
              ["run", "-d", "--name", "sample", "--ulimit", "nofile=65536:65536"] ++
-               ["--network", "bridge", "-p", "4000:4000", "-v", "#{data}:/data"] ++
+               ["--network", "bridge", "-p", "127.0.0.1:4000:4000", "-v", "#{data}:/data"] ++
                ["-p", "4001:4001", "--restart", "unless-stopped", @ref],
              ["container", "inspect", "sample"]
            ]

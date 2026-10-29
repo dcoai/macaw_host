@@ -77,7 +77,8 @@ defmodule Ctl.Docker do
   @doc """
   The `docker run` argv for the settings: what `start` runs. On host
   networking the app listens on PORT directly; on any other network it
-  listens on its own port and PORT is published to it. Then the data
+  listens on its own port and PORT is published to it on BIND's address
+  (`Ctl.Env.published/1`). Then the data
   volume, the app's own arguments (`Ctl.AppCommands.run_args/1`, when it
   defines one), DOCKER_RUN_ARGS, and the image.
   """
@@ -88,7 +89,7 @@ defmodule Ctl.Docker do
       if Ctl.Env.host_network?(env) do
         ["--network", "host", "-e", "PORT=#{port}"]
       else
-        ["--network", Ctl.Env.get(env, "NETWORK"), "-p", "#{port}:#{Ctl.App.container_port()}"]
+        ["--network", Ctl.Env.get(env, "NETWORK"), "-p", "#{Ctl.Env.published(env)}:#{Ctl.App.container_port()}"]
       end
 
     ["run", "-d", "--name", Ctl.Env.get(env, "NAME")] ++

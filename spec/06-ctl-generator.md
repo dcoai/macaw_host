@@ -199,6 +199,8 @@ the sample's reset-password alice, the password answered at prompt_secret, runs 
 - it must not set `@data_dir` on any line (`"Ctl.AppCommands must not set @data_dir: the script's one line of host state is in Ctl.Home"`);
 - it must not define `status_lines/1`, the hook's arity before 0.3.0, which the script no longer calls: an app still defining it would lose its lines without a word, so it is refused when the script is generated, `"Ctl.AppCommands.status_lines/1 is now status_lines/2 (env, report)"`.
 
+**The contract is the top module's own functions:** the checks of `commands/0`, `run/3` and `status_lines/1` read only the `def`s in `Ctl.AppCommands`'s own `do` block, never a nested module's, so a `Helpers.run/3` does not stand in for `run/3` and a `Helpers.status_lines/1` is not the old hook (macaw_host#20).
+
 `nil` is the module of no commands (§2).
 
 ```test:gen-app-commands-shape
@@ -215,6 +217,10 @@ the sample commands plus a defmodule Ctl.Home give "may define only Ctl.AppComma
 
 ```test:gen-app-commands-status-lines
 the sample commands with status_lines(env) in place of status_lines(env, report) give exactly "Ctl.AppCommands.status_lines/1 is now status_lines/2 (env, report)" from app_commands/1, and generate/2 raises ArgumentError with that message; the sample commands as they are are accepted
+```
+
+```test:gen-app-commands-own-functions
+a fixture whose nested Helpers defines run/3 and status_lines/1 while Ctl.AppCommands has only commands/0 gives "Ctl.AppCommands must define run/3"; with a run/3 of its own added to Ctl.AppCommands it is accepted, the nested status_lines/1 not refused
 ```
 
 ```test:gen-app-last-object

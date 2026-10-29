@@ -373,6 +373,25 @@ defmodule Macaw.Host.CtlTest do
 
       assert {:ok, _} = Ctl.app_commands(CtlFixture.app_commands())
     end
+
+    @tag verifies: "gen-app-commands-own-functions"
+    test "the contract is Ctl.AppCommands's own functions, never a nested module's" do
+      source = File.read!(Path.expand("../../fixtures/ctl/app_commands_nested.ex", __DIR__))
+
+      # Helpers.run/3 is not Ctl.AppCommands.run/3.
+      assert {:error, "Ctl.AppCommands must define run/3"} = Ctl.app_commands(source)
+
+      # With run/3 of its own, Helpers.status_lines/1 is not the old hook.
+      valid =
+        String.replace(
+          source,
+          "  def commands, do: []\n",
+          "  def commands, do: []\n  def run(command, _env, _args), do: {:error, command}\n"
+        )
+
+      assert valid != source
+      assert {:ok, ^valid} = Ctl.app_commands(valid)
+    end
   end
 
   describe "compare/2, for --check" do

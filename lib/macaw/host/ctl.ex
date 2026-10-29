@@ -127,10 +127,10 @@ defmodule Macaw.Host.Ctl do
   @doc """
   Checks the source of an app's commands: it parses, holds nothing but the
   one `Ctl.AppCommands` module (no other module, no code outside it,
-  which would run whenever the script loads), and defines `commands/0`
-  and `run/3`, so it can neither replace a generic module nor carry a
-  second `@data_dir`; a `status_lines/1`, the hook's old arity, is
-  refused naming `status_lines/2`. nil is the module of no commands.
+  which would run whenever the script loads), and itself (not a nested
+  module) defines `commands/0` and `run/3`, so it can neither replace a
+  generic module nor carry a second `@data_dir`; a `status_lines/1`, the
+  hook's old arity, is refused naming `status_lines/2`. nil is the module of no commands.
   """
   @spec app_commands(String.t() | nil) :: {:ok, String.t()} | {:error, String.t()}
   def app_commands(nil), do: {:ok, @no_app_commands}
@@ -139,9 +139,10 @@ defmodule Macaw.Host.Ctl do
     with {:ok, ast} <- parse(source),
          :ok <- only_app_modules(ast),
          :ok <- nothing_beside(source),
-         :ok <- defines(ast, :commands, 0),
-         :ok <- defines(ast, :run, 3),
-         :ok <- no_old_status_lines(ast),
+         own = own_definitions(ast),
+         :ok <- defines(own, :commands, 0),
+         :ok <- defines(own, :run, 3),
+         :ok <- no_old_status_lines(own),
          :ok <- no_data_dir(source) do
       {:ok, source}
     end
@@ -214,11 +215,19 @@ defmodule Macaw.Host.Ctl do
 
   defp first_line(ast), do: ast |> Macro.to_string() |> String.split("\n") |> hd()
 
-  defp defines(ast, name, arity) do
-    {_, found?} =
-      Macro.prewalk(ast, false, fn
-        {:def, _, [head | _]} = node, acc -> {node, acc or def_head?(head, name, arity)}
-        node, acc -> {node, acc}
+  # The contract is Ctl.AppCommands's own functions: the expressions of its
+  # `do` block, never a nested module's. Called once `nothing_beside/1` has
+  # held the file to that one module.
+  defp own_definitions(ast) do
+    [{:defmodule, _, [{:__aliases__, _, [:Ctl, :AppCommands]}, [{:do, body}]]}] = top_level(ast)
+    top_level(body)
+  end
+
+  defp defines(own, name, arity) do
+    found? =
+      Enum.any?(own, fn
+        {:def, _, [head | _]} -> def_head?(head, name, arity)
+        _ -> false
       end)
 
     if found?, do: :ok, else: {:error, "Ctl.AppCommands must define #{name}/#{arity}"}

@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## v0.2.1 (2026-10-29)
+
+Operator output: status, config set and migrate say what an operator needs, plainly (milestone "macaw_host operator output").
 
 - `Release.migrate/1` answers the versions it applied (`"versions": [...]`) with Ecto's log off, so the JSON answer is the only thing on stdout (spec 03 §2, #10, macaw#107).
 - `config set` names what a bare word should have been: "not a literal" whether or not the word is a known atom, and, when the setting's type takes the text as a string, how to quote it (spec 01 §1.6, #9, macaw#106).

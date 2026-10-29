@@ -31,8 +31,11 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
     with_io(fn -> Ctl.dispatch(argv, sys_env, script) end)
   end
 
-  # The image's id before the pull is `before`, after it `later`.
+  # The image's id before the pull is `before`, after it `later`, for the
+  # next install: the first answer is given once per call of this.
   defp image_ids(before, later) do
+    Process.delete(:image_id_asked)
+
     [
       {fn
          "docker", ["image", "inspect", "-f" | _] -> Process.put(:image_id_asked, true) == nil
@@ -262,9 +265,76 @@ defmodule Macaw.Host.Ctl.LifecycleTest do
 
       assert {:ok, out} = run(script, ["update"])
       assert out =~ "already on the newest #{@ref}"
+      refute out =~ "pinned"
       assert File.read!(script) == current
       refute File.exists?(script <> ".bak")
       refute Enum.any?(Recorder.docker_calls(), &match?(["run", "-d" | _], &1))
+    end
+
+    @tag verifies: "cmd-update-pinned"
+    test "with a TAG other than latest, says it is pinned, not the newest", %{tmp_dir: tmp_dir} do
+      {script, _home} = installed!(tmp_dir)
+      pinned = "registry.example/acme/sample:1.2"
+
+      Recorder.install(
+        [@daemon_up, {["docker", "pull", pinned], {"pulled\n", 0}}] ++
+          image_ids("sha256:same", "sha256:same")
+      )
+
+      assert {:ok, out} = run(script, ["update"], %{"TAG" => "1.2"})
+      assert out =~ "pinned to 1.2, which does not move: #{pinned} is unchanged\n"
+      refute out =~ "already on the newest"
+      assert ["pull", pinned] in Recorder.docker_calls()
+    end
+  end
+
+  describe "update's note" do
+    @note "the new image migrates the data when it starts; rolling back restores code, not data\n"
+
+    @tag verifies: "cmd-update-note"
+    test "follows a recreation, here or handed over, and nothing else", %{tmp_dir: tmp_dir} do
+      {script, _home} = installed!(tmp_dir)
+      assert Ctl.App.update_note() <> "\n" == @note
+
+      # Recreated by this script: the note comes last, after the start.
+      Recorder.install(
+        [@daemon_up, @pulled, @running, {["docker" | @extract_args], {CtlFixture.script(), 0}}] ++
+          image_ids("sha256:old", "sha256:new") ++
+          [@image_present, @owned, {["docker", "run", "-d"], {"id\n", 0}}, {["docker"], {"", 0}}]
+      )
+
+      assert {:ok, out} = run(script, ["update"])
+
+      assert String.ends_with?(
+               out,
+               "sample is running — ./sample-ctl status shows Sample's health once it is up\n" <>
+                 @note
+             )
+
+      # Recreated by the script it was handed to, and by one that failed.
+      for {status, noted?} <- [{0, true}, {1, false}] do
+        {script, _home} = installed!(Path.join(tmp_dir, "handed-#{status}"))
+
+        Recorder.install(
+          [@daemon_up, @pulled, @running, {["docker" | @extract_args], {newer_script(), 0}}] ++
+            image_ids("sha256:old", "sha256:new") ++
+            [{[script, "restart"], {"restarted\n", status}}]
+        )
+
+        assert {{:halt, ^status}, out} = run(script, ["update"])
+        assert String.ends_with?(out, "restarted\n" <> @note) == noted?
+        assert out =~ @note == noted?
+      end
+
+      # Nothing new, and a new image with no container: no note.
+      for {container, ids} <- [
+            {@running, image_ids("sha256:same", "sha256:same")},
+            {nil, image_ids("sha256:old", "sha256:new")}
+          ] do
+        Recorder.install(Enum.reject([@daemon_up, @pulled, container], &is_nil/1) ++ ids)
+        assert {:ok, out} = run(script, ["update"])
+        refute out =~ @note
+      end
     end
   end
 

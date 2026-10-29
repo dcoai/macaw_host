@@ -688,7 +688,9 @@ defmodule Ctl.Commands do
   carries (keeping this one's `@data_dir` line), and that script, which
   knows how to run the new image, recreates the container if there is one.
   An unchanged image still offers its script, in case this copy has
-  drifted from it.
+  drifted from it. A TAG other than `latest` is pinned, and an unchanged
+  pull of it is said to be so. Once the container has been recreated, the
+  app's own note (`Ctl.App.update_note/0`) follows.
   """
   def update(env, _args) do
     ref = Ctl.Env.ref(env)
@@ -700,7 +702,7 @@ defmodule Ctl.Commands do
          :ok <- Ctl.Docker.pull(ref, Ctl.Env.get(env, "IMAGE")) do
       cond do
         before == Ctl.Docker.image_id(ref) ->
-          IO.puts("already on the newest #{ref}")
+          IO.puts(unchanged(env))
           sync_self(env, nil)
 
         not Ctl.Docker.container_exists?(name) ->
@@ -708,13 +710,38 @@ defmodule Ctl.Commands do
           sync_self(env, nil)
 
         true ->
-          with :ok <- sync_self(env, "restart") do
-            IO.puts("new image; recreating #{name}")
-            restart(env, [])
-          end
+          env |> recreate(name) |> noted()
       end
     end
   end
+
+  # The new script, when the image carries one, recreates the container;
+  # otherwise this one does.
+  defp recreate(env, name) do
+    with :ok <- sync_self(env, "restart") do
+      IO.puts("new image; recreating #{name}")
+      restart(env, [])
+    end
+  end
+
+  # `latest` moves whenever a new image is pushed; any other TAG names one
+  # release, so a pull that brings nothing is the expected answer.
+  defp unchanged(env) do
+    case Ctl.Env.get(env, "TAG") do
+      "latest" -> "already on the newest #{Ctl.Env.ref(env)}"
+      tag -> "pinned to #{tag}, which does not move: #{Ctl.Env.ref(env)} is unchanged"
+    end
+  end
+
+  # The app's note (`Ctl.App.update_note/0`) follows a recreation that
+  # succeeded, here or in the script it was handed to; a failed one answers
+  # with its own error alone.
+  <%= if @update_note do %>defp noted(result) when result in [:ok, {:halt, 0}] do
+    IO.puts(Ctl.App.update_note())
+    result
+  end
+
+  <% end %>defp noted(result), do: result
 
   # Compared by content, after carrying the `@data_dir` line over, which
   # also catches a local copy that has drifted from the image it manages.

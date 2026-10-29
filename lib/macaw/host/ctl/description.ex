@@ -43,6 +43,7 @@ defmodule Macaw.Host.Ctl.Description do
   | `:settings` | `[]` | the app's own host settings: `{"KEY", "default", "help"}` |
   | `:host_network` | `true` | `false` refuses `NETWORK=host`, for an app whose listeners must stay off the host's interfaces |
   | `:app_keys` | `[]` | `{"KEY", "config_key"}`: a name `env set` refuses, pointing at `config set config_key` |
+  | `:update_note` | `nil` | what `update` says once it has recreated the container, or `nil` for nothing |
   | `:app_commands` | `"ctl/app_commands.ex"` | the file defining `Ctl.AppCommands`, or `false` for none |
   | `:output` | `"container/<name>-ctl"` | where the script is written |
 
@@ -67,6 +68,7 @@ defmodule Macaw.Host.Ctl.Description do
     :settings,
     :host_network,
     :app_keys,
+    :update_note,
     :app_commands,
     :output
   ]
@@ -158,6 +160,7 @@ defmodule Macaw.Host.Ctl.Description do
           settings: [],
           host_network: true,
           app_keys: [],
+          update_note: nil,
           app_commands: "ctl/app_commands.ex",
           output: "container/#{name}-ctl"
         },
@@ -199,6 +202,8 @@ defmodule Macaw.Host.Ctl.Description do
       {:settings, d.settings, &is_list/1, "a list of {\"KEY\", \"default\", \"help\"}"},
       {:host_network, d.host_network, &is_boolean/1, "true or false"},
       {:app_keys, d.app_keys, &app_keys?/1, "a list of {\"KEY\", \"config_key\"}"},
+      {:update_note, d.update_note, &(&1 == nil or (is_binary(&1) and String.trim(&1) != "")),
+       "a non-empty string, or nil"},
       {:app_commands, d.app_commands, &(&1 == false or nonempty?(&1)), "a path, or false"},
       {:output, d.output, &nonempty?/1, "a path"}
     ])

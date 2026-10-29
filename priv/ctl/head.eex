@@ -116,6 +116,12 @@ defmodule Ctl.App do
   `{"KEY", "config key"}`, refused by `env set`.
   """
   def app_keys, do: <%= inspect(@app_keys, limit: :infinity, printable_limit: :infinity) %>
+
+  @doc """
+  What `update` says once it has recreated the container from a new image,
+  or nil for nothing: what an operator must know about that step.
+  """
+  def update_note, do: <%= inspect(@update_note, printable_limit: :infinity) %>
 end
 
 # Structure: `Ctl.App` is what the script manages; `Ctl.Script` reads and

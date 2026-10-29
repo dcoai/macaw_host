@@ -208,6 +208,29 @@ defmodule Macaw.Host.CtlTest do
       assert {"BIND", "::1", _} = List.keyfind(settings, "BIND", 0)
     end
 
+    @tag verifies: "gen-description-update-note"
+    test ":update_note is a non-empty string, nil by default" do
+      put = &Keyword.put(CtlFixture.description(), &1, &2)
+
+      assert {:error, ":ctl :update_note must be a non-empty string, or nil, not \"\""} =
+               Description.new(put.(:update_note, ""))
+
+      assert {:error, ":ctl :update_note must be a non-empty string, or nil, not :migrates"} =
+               Description.new(put.(:update_note, :migrates))
+
+      assert {:error, ":ctl :update_note must be" <> _} =
+               Description.new(put.(:update_note, "  "))
+
+      assert {:ok, %{update_note: nil}} =
+               Description.new(Keyword.delete(CtlFixture.description(), :update_note))
+
+      assert Ctl.generate(Keyword.delete(CtlFixture.description(), :update_note), nil) =~
+               "  def update_note, do: nil\n"
+
+      # The sample script carries its note as data.
+      assert Elixir.Ctl.App.update_note() == CtlFixture.description()[:update_note]
+    end
+
     @tag verifies: "script-bind-default"
     @tag :tmp_dir
     test "a description's :bind is the script's default BIND", %{tmp_dir: dir} do

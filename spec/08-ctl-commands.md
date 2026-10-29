@@ -191,9 +191,11 @@ stop makes exactly: info; container inspect sample; stop -t 30 sample; rm -f sam
 ## 7. update {#host-cmd-update}
 
 `./<app>-ctl update` pulls TAG again (`Ctl.Commands.update/2`), comparing the image's id before and after the pull:
-- **an unchanged image:** `"already on the newest <ref>"`, and the script is synced with the image's (below), without a restart;
+- **an unchanged image:** `"already on the newest <ref>"` when TAG is `latest`; **with any other TAG, `"pinned to <TAG>, which does not move: <ref> is unchanged"`,** since such a tag names one release and a pull that brings nothing is the expected answer, not a delay. Either way the script is synced with the image's (below), without a restart;
 - **a new image and no container:** `"pulled a new <ref>; <NAME> is not there — ./<app>-ctl start"`, and the script synced, without a restart;
 - **a new image and a container:** the script synced with the restart handed over (below); when it isn't replaced, `"new image; recreating <NAME>"` and this script restarts the container itself.
+
+**The app's note.** With an `:update_note` ([06 §3.2](06-ctl-generator.md#host-gen-optional)), **`update` prints it, as a line of its own, after a recreation that succeeded,** by this script (`:ok`) or by the script the restart was handed to (its exit status 0), and at no other time: not for an unchanged image, a new image with no container, or a recreation that failed, which answers with its own error alone. It is what an operator must know about that step (for apu, that the new image migrates the volume when it starts, and rolling back restores code, not data). Without one nothing is printed.
 
 **Syncing the script with the image's.** The image carries the script that knows how to run it (`bin/ctl` prints it, [§10](#host-cmd-adopter)):
 1. it is extracted (`run --rm IMAGE:TAG bin/ctl`, stdout only). **Anything that isn't this kind of script** (no `bin/ctl`, a failure, text not starting `#!/usr/bin/env elixir`) **is never written over a working one;** nothing is said, and the command goes on;
@@ -220,6 +222,14 @@ an image carrying this very script (with @data_dir nil): nothing written, no .ba
 
 ```test:cmd-update-unchanged
 an unchanged image and no container: "already on the newest <ref>", nothing written, no run
+```
+
+```test:cmd-update-pinned
+with TAG 1.2 and an unchanged image: "pinned to 1.2, which does not move: registry.example/acme/sample:1.2 is unchanged", never "already on the newest", having pulled registry.example/acme/sample:1.2
+```
+
+```test:cmd-update-note
+the sample's note is the last line after this script recreates the container, and after a handed-over restart that exits 0; not after one that exits 1, for an unchanged image, or for a new image with no container
 ```
 
 ## 8. status {#host-cmd-status}

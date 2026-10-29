@@ -104,6 +104,7 @@ ctl: [
 | `:settings` | `[]` | the app's own host settings, `{"KEY", "default", "help"}`, the key upper-case and not one of the seven every script has |
 | `:host_network` | `true` | `false` refuses `NETWORK=host` ([07 §5.4](07-ctl-script.md#host-script-env-validate)), for an app whose listeners must stay off the host's interfaces (a console bound inside the container) |
 | `:app_keys` | `[]` | `{"KEY", "config_key"}`: a name that is the app's own configuration, which `env set` refuses with a pointer to `config set` ([08 §3](08-ctl-commands.md#host-cmd-env)); KEY upper-case, never a host setting |
+| `:update_note` | `nil` | what `update` prints, as a line of its own, once it has recreated the container from a new image and only then ([08 §7](08-ctl-commands.md#host-cmd-update)): what an operator must know about that step, such as that the new image migrates the data when it starts and rolling back restores code, not data. A non-empty string, or `nil` for nothing; carried into the script as data (`Ctl.App.update_note/0`) |
 | `:app_commands` | `"ctl/app_commands.ex"` | the file defining `Ctl.AppCommands`, or `false` for none |
 | `:output` | `"container/<name>-ctl"` | where the script is written |
 
@@ -114,6 +115,7 @@ Checked in this order, the first fault answered:
 - **any key it doesn't know:** `":ctl has unknown keys: :prot"`. A misspelled optional key silently taking its default is the bug this refuses;
 - **every missing required key,** named together: `":ctl is missing :release, :uid"`;
 - **a value of the wrong shape:** `":ctl :uid must be \"uid:gid\", both numbers, not \"app\""`, and likewise for each key of §3.1 and §3.2 (`:bind` is an address `:inet.parse_strict_address/1` takes: `":ctl :bind must be an IP address as a string, like \"127.0.0.1\" or \"0.0.0.0\", not \"localhost\""`);
+- **an `:update_note` that is neither `nil` nor a string with something in it:** `":ctl :update_note must be a non-empty string, or nil, not \"\""`, and likewise for an atom or a string of spaces;
 - **a `:bind` other than `"0.0.0.0"` with `network: "host"`:** `":ctl :bind must be \"0.0.0.0\" with network: \"host\", which publishes no port, not \"127.0.0.1\""`. The app listens on the host's own interfaces there, and the script would refuse its own defaults ([07 §5.4](07-ctl-script.md#host-script-env-validate)), so a host-network app states `bind: "0.0.0.0"`;
 - **a setting that redefines one of the seven:** `":ctl :settings cannot redefine PORT, which every script has"`; a setting key that isn't upper-case, or an entry that isn't `{"KEY", "default", "help"}`, is named too;
 - **an app key that names a host setting:** `":ctl :app_keys names ADMIN_PORT, which is a host setting"` (`env set` would refuse the setting it edits).
@@ -124,6 +126,10 @@ missing :release and :uid gives ":ctl is missing :release, :uid"; an extra prot:
 
 ```test:gen-description-bind
 bind "localhost" gives ":ctl :bind must be an IP address as a string, like \"127.0.0.1\" or \"0.0.0.0\", not \"localhost\"" and a tuple is refused likewise; network "host" without :bind gives the host-network message; network "host" with bind "0.0.0.0" is accepted; bind "::1" is the BIND setting's default
+```
+
+```test:gen-description-update-note
+update_note "" gives ":ctl :update_note must be a non-empty string, or nil, not \"\"", :migrates and "  " are refused likewise; without it the description has update_note nil and the script def update_note, do: nil; the sample script's Ctl.App.update_note/0 is its description's
 ```
 
 ### 3.4 What the templates are given {#host-gen-derived}

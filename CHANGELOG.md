@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `Release.migrate/1` answers the versions it applied (`"versions": [...]`) with Ecto's log off, so the JSON answer is the only thing on stdout (spec 03 §2, #10, macaw#107).
 - `config set` names what a bare word should have been: "not a literal" whether or not the word is a known atom, and, when the setting's type takes the text as a string, how to quote it (spec 01 §1.6, #9, macaw#106).
 - `status` pads each level of the app's report to its widest key plus two spaces, so a key never runs into its value, and prints a list as words and nil as a dash, not JSON; `config`'s help line names `@FILE` (spec 07, spec 08 §8, #8, #7).
 

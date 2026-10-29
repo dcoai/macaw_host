@@ -26,7 +26,9 @@ defmodule Macaw.Host.Release do
 
   @doc """
   Runs every repo's migrations for `app` (its `:ecto_repos`), starting
-  only what migrating needs. Requires `ecto_sql`.
+  only what migrating needs, and emits the versions it applied. Ecto's own
+  log is off: the answer is the one line on stdout (spec 03 §1). Requires
+  `ecto_sql`.
   """
   @spec migrate(atom()) :: :ok
   def migrate(app) do
@@ -35,15 +37,17 @@ defmodule Macaw.Host.Release do
     unless Code.ensure_loaded?(Ecto.Migrator),
       do: fail("migrate needs ecto_sql, which #{app} does not depend on")
 
-    for repo <- Application.fetch_env!(app, :ecto_repos) do
-      {:ok, _, _} =
-        apply(Ecto.Migrator, :with_repo, [
-          repo,
-          &apply(Ecto.Migrator, :run, [&1, :up, [all: true]])
-        ])
-    end
+    quiet = [all: true, log: false, log_migrations_sql: false, log_migrator_sql: false]
 
-    emit(%{ok: true, migrated: true})
+    versions =
+      for repo <- Application.fetch_env!(app, :ecto_repos) do
+        {:ok, versions, _} =
+          apply(Ecto.Migrator, :with_repo, [repo, &apply(Ecto.Migrator, :run, [&1, :up, quiet])])
+
+        versions
+      end
+
+    emit(%{ok: true, migrated: true, versions: versions |> Enum.concat() |> Enum.sort()})
   end
 
   @doc """

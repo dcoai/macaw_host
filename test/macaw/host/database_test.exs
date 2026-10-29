@@ -58,14 +58,52 @@ defmodule Macaw.Host.DatabaseTest do
         send(self(), {:out, capture_io(fn -> Release.migrate(:rt_db_app) end)})
       end)
 
-    assert out =~ "create table probes"
+    refute out =~ "create table probes"
     assert_received {:out, json}
-    assert JSON.decode!(json) == %{"ok" => true, "migrated" => true}
+
+    assert JSON.decode!(json) == %{
+             "ok" => true,
+             "migrated" => true,
+             "versions" => [20_260_101_000_000]
+           }
 
     # Only what migrating needed was started: the repo is stopped again, and the table is there.
     refute Process.whereis(TestRepo)
     start_supervised!(TestRepo)
     assert Health.migrations(TestRepo) == :ok
     assert {:ok, _} = Ecto.Adapters.SQL.query(TestRepo, "SELECT name FROM probes", [])
+  end
+
+  # The release runs migrate in a VM of its own, whose stdout is the answer: run it so, and
+  # read nothing but stdout.
+  @tag verifies: "release-migrate-quiet"
+  test "in a VM of its own, migrate prints one line, its answer, with the versions it applied",
+       %{tmp_dir: dir} do
+    paths = Path.wildcard(Path.join(Mix.Project.build_path(), "lib/*/ebin"))
+
+    # SQLite: the migrator opens two connections at once, and in WAL mode each sets the
+    # journal as it opens, which can find the file locked (a server database never does),
+    # so the child's repo keeps a rollback journal.
+    code = """
+    Application.put_env(:rt_db_app, :ecto_repos, [Macaw.Host.TestRepo])
+    Macaw.Host.TestRepo.configure(#{inspect(dir)})
+    config = Application.fetch_env!(:macaw_host, Macaw.Host.TestRepo)
+    Application.put_env(:macaw_host, Macaw.Host.TestRepo, config ++ [journal_mode: :delete, busy_timeout: 10_000])
+    Macaw.Host.Release.migrate(:rt_db_app)
+    """
+
+    run = fn -> System.cmd("elixir", Enum.flat_map(paths, &["-pa", &1]) ++ ["-e", code]) end
+
+    assert {first, 0} = run.()
+    assert [line] = String.split(first, "\n", trim: true)
+
+    assert JSON.decode!(line) == %{
+             "ok" => true,
+             "migrated" => true,
+             "versions" => [20_260_101_000_000]
+           }
+
+    assert {again, 0} = run.()
+    assert JSON.decode!(again) == %{"ok" => true, "migrated" => true, "versions" => []}
   end
 end

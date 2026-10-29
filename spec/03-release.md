@@ -42,10 +42,14 @@ in a fresh VM, RT_CTL_ARGS "not json" and "[1, 2]" each give exactly "RT_CTL_ARG
 ## 2. Migrating {#host-release-migrate}
 
 <!-- surfex: release-migrate-runs -->
-`Macaw.Host.Release.migrate/1` runs every migration of each of the app's repos (its `:ecto_repos`), up, starting only what migrating needs (`Ecto.Migrator.with_repo/2`), then emits `{"ok": true, "migrated": true}`.
+`Macaw.Host.Release.migrate/1` runs every migration of each of the app's repos (its `:ecto_repos`), up, starting only what migrating needs (`Ecto.Migrator.with_repo/2`), then emits `{"ok": true, "migrated": true, "versions": [...]}`, **the versions it applied,** in order: none when the database is current. **Ecto's own log is off** (`log: false`, `log_migrations_sql: false`, `log_migrator_sql: false`), so what migrating did reaches the caller as data, never as log text before the answer, and the answer is the one line on stdout (§1).
 
 - It **requires `ecto_sql`;** without it, it fails with `"migrate needs ecto_sql, which <app> does not depend on"`.
 - An app without `:ecto_repos` configured fails loudly (raising, naming `ecto_repos`), never silently.
+
+```test:release-migrate-quiet
+in a VM of its own, migrate of a repo with one pending migration prints exactly one line on stdout, {"ok":true,"migrated":true,"versions":[<the version>]}, and a second run answers versions []
+```
 
 ```test:release-migrate-no-repos
 in a fresh VM, migrate of an app with no :ecto_repos exits non-zero with output naming ecto_repos

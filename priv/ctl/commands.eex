@@ -767,17 +767,21 @@ defmodule Ctl.Commands do
     end)
   end
 
+  # Each level's keys padded to its widest plus a gap of two, so a key never runs into its
+  # value; the top level is never narrower than status's own lines (spec 08 §8).
   defp print_report(report) do
     {healthy, rest} = Map.pop(report, "healthy")
+    width = width(Map.keys(report), 10)
 
     unless is_nil(healthy),
-      do: IO.puts("health:   " <> if(healthy, do: "healthy", else: "UNHEALTHY"))
+      do: IO.puts(String.pad_trailing("health:", width) <> if(healthy, do: "healthy", else: "UNHEALTHY"))
 
     for {key, value} <- Enum.sort(rest) do
       case value do
         %{} = nested ->
           IO.puts("#{key}:")
-          for {sub, v} <- Enum.sort(nested), do: IO.puts("  #{String.pad_trailing(sub <> ":", 16)}#{scalar(v)}")
+          inner = width(Map.keys(nested), 0)
+          for {sub, v} <- Enum.sort(nested), do: IO.puts("  #{String.pad_trailing(sub <> ":", inner)}#{scalar(v)}")
 
         [%{} | _] = list ->
           IO.puts("#{key}:")
@@ -786,14 +790,20 @@ defmodule Ctl.Commands do
               do: IO.puts("  - " <> Enum.map_join(Enum.sort(item), ", ", fn {k, v} -> "#{k}: #{scalar(v)}" end))
 
         _ ->
-          IO.puts(String.pad_trailing(key <> ":", 10) <> scalar(value))
+          IO.puts(String.pad_trailing(key <> ":", width) <> scalar(value))
       end
     end
 
     :ok
   end
 
+  defp width(keys, least), do: max(least, Enum.max(Enum.map(keys, &(String.length(&1) + 3)), fn -> 0 end))
+
+  # A value as words: a list's items joined, nothing as a dash.
   defp scalar(value) when is_binary(value), do: value
+  defp scalar(nil), do: "—"
+  defp scalar(list) when is_list(list), do: Enum.map_join(list, ", ", &scalar/1)
+  defp scalar(value) when is_number(value) or is_boolean(value), do: to_string(value)
   defp scalar(value), do: JSON.encode!(value)
 
   @logs_usage "usage: ./#{@script} logs [-n N]"

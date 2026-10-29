@@ -112,7 +112,7 @@ defmodule Macaw.Host.CtlTest do
 
       assert status == 0
       refute out =~ "warning"
-      assert out =~ "./sample-ctl config list | get KEY | set KEY VALUE | unset KEY"
+      assert out =~ "./sample-ctl config list | get KEY | set KEY VALUE|@FILE | unset KEY"
       assert out =~ "Sample's own commands:"
       assert out =~ "./sample-ctl reset-password USER"
       assert out =~ "ADMIN_PORT        4001"

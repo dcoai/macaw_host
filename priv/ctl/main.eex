@@ -95,7 +95,7 @@ defmodule Ctl do
     #{line("logs [-n N]", "follow the log; -n N for the last N lines")}
     #{line("shell", "a shell inside the running container")}
     #{line("env list | get KEY | set KEY=VALUE… | unset KEY", "host settings: image, port, network (#{Ctl.App.name()}.conf); --reveal shows secrets")}
-    #{line("config list | get KEY | set KEY VALUE | unset KEY", "#{@title}'s own settings (data/config.exs)")}
+    #{line("config list | get KEY | set KEY VALUE|@FILE | unset KEY", "#{@title}'s own settings (data/config.exs)")}
     #{app_usage()}
     The data directory is the only thing this host keeps; its path is the one
     line of this script that is yours, and `update` carries it over. Any host

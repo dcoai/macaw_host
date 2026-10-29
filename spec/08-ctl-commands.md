@@ -209,12 +209,16 @@ an unchanged image and no container: "already on the newest <ref>", nothing writ
 - `state:` running, docker's own status, stopped, or not created; for a container, its `image:` and `started:`;
 - `wanted:` IMAGE:TAG, `(present locally)` or `(not pulled)`;
 - `home:`, `settings:` (`(none yet — defaults)` when there is no `<app>.conf`), and `data:`, then the app's own host lines (`Ctl.AppCommands.status_lines/1`, when it defines one);
-- **when it is running, the app's own report,** asked of the running app (`rpc <Release>.status()`, [03 §4](03-release.md#host-release-status)). The report is **the last JSON object** the call prints; anything before it (a warning from the node) is not the answer. `healthy` is shown as `health: healthy` or `UNHEALTHY`, every other key in sorted order, a nested map key by key, **a list of maps one element a line** (`  - key: value, key: value`, keys sorted). An app that doesn't answer is `app: not answering yet`.
+- **when it is running, the app's own report,** asked of the running app (`rpc <Release>.status()`, [03 §4](03-release.md#host-release-status)). The report is **the last JSON object** the call prints; anything before it (a warning from the node) is not the answer. `healthy` is shown as `health: healthy` or `UNHEALTHY`, every other key in sorted order, a nested map key by key, **a list of maps one element a line** (`  - key: value, key: value`, keys sorted). **Each level's keys are padded to the widest key at that level plus two spaces,** the top level never narrower than status's own lines, so a key never runs into its value; a list of words prints joined by `, ` and `nil` as `—`, never as JSON. An app that doesn't answer is `app: not answering yet`.
 
 `status` answers `:ok` whatever the app's health.
 
 ```test:cmd-status
 with a running container whose rpc prints "a warning" and then {"healthy":true,"version":"1.2.0","checks":{"database":"ok"}}: the last call is exec sample /app/bin/sample rpc Sample.Release.status(), and the output has "state:    running", "home:     <home>", "health:   healthy", "version:  1.2.0" and "checks:" with "  database:" "ok"
+```
+
+```test:cmd-status-layout
+a report with a top-level key and a nested key longer than the old widths keeps two spaces before each value, a list of words prints as "a, b" and nil as "—"
 ```
 
 ```test:cmd-status-app-lines

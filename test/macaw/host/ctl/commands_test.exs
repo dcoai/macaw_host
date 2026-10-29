@@ -181,6 +181,29 @@ defmodule Macaw.Host.Ctl.CommandsTest do
              "untrusted_proxies:\n  - peer: 10.0.32.64, requests: 57\n  - peer: 10.0.0.9, requests: 21\n"
   end
 
+  @tag verifies: "cmd-status-layout"
+  test "status pads each level to its widest key, and prints lists and nil as words",
+       %{script: script} do
+    report =
+      ~s({"healthy":true,"certificate_expires":"2027-01-01","origins":["a.example","b.example"],"proxy":null,"checks":{"database_replication":"ok","db":"ok"}})
+
+    Recorder.install([
+      @daemon_up,
+      @running,
+      @image_present,
+      {["docker", "exec", "sample"], {report <> "\n", 0}}
+    ])
+
+    assert {:ok, out} = run(script, ["status"])
+
+    # "certificate_expires:" is 20 wide: every top-level key is padded to 22.
+    assert out =~ "health:               healthy\n"
+    assert out =~ "certificate_expires:  2027-01-01\n"
+    assert out =~ "origins:              a.example, b.example\n"
+    assert out =~ "proxy:                —\n"
+    assert out =~ "checks:\n  database_replication:  ok\n  db:                    ok\n"
+  end
+
   describe "config" do
     @set_answer {["docker", "run", "--rm", "--user", "2060:2060"],
                  {~s({"ok":true,"set":"tz","restart":"restart to apply"}\n), 0}}

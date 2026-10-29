@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- `status` pads each level of the app's report to its widest key plus two spaces, so a key never runs into its value, and prints a list as words and nil as a dash, not JSON; `config`'s help line names `@FILE` (spec 07, spec 08 §8, #8, #7).
+
 ## v0.2.0 (2026-10-28)
 
 - App hooks in `Ctl.AppCommands`, each optional: `validate/1` (the app's own checks of its host settings, on every `env set`, `start` and throwaway container), `seeds/1` (app config `init` seeds from this host's settings) and `status_lines/1` (host lines in `status`). `status` prints a list of maps one element a line (#1, #5).

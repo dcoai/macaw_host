@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `Ctl.AppCommands.before_start/1`, optional: the app's precondition for `start`, asked once the image and the data are ready and before the container is touched (spec 06 §4, 08 §5, #13, macaw#92).
 - **Every generated script changes:** a seventh host setting, `BIND`, the address PORT is published on. On a docker network the run writes `-p BIND:PORT:<container port>`, and BIND defaults to `127.0.0.1` (default closed: only this host, a proxy on it included, reaches the app). The description's new `:bind` key sets the default (an IP address; `"0.0.0.0"` with `network: "host"`). **An adopter whose proxy is on another host states `bind: "0.0.0.0"`** (or its hosts set BIND); otherwise the app stops answering from that host when its script is regenerated. `env set` and `start` refuse a BIND that isn't an IP address, and, with `NETWORK=host`, one other than `0.0.0.0`. `status` prints where the port is published: `published: 127.0.0.1:4000 (this host only)`, `(every interface)`, `(that address)`, or the host's own network (spec 06 §3, spec 07 §5–6, spec 08 §5, §8; #12, macaw#92).
 
 ## v0.2.1 (2026-10-29)

@@ -148,12 +148,17 @@ a release answering exit status 1 makes config get nope answer {:halt, 1}
 1. the data directory, valid settings, docker answering;
 2. **the image, pulled if missing;**
 3. **the data volume handed to the container user.** The image's user has a fixed uid and gid; when `data/` isn't already owned by that uid, **a throwaway root container of the same image** chowns it (root inside it is what docker access amounts to anyway), so **no sudo** is needed on the host. When that fails, it prints the exact line to run by hand, `sudo chown <uid>:<gid> <data>`; when `data/` can't even be created, `sudo install -d -o "$USER" <dir>`;
-4. **the container recreated, always:** an existing one is removed (`rm -f`), so every changed setting takes effect. Nothing of value lives in the container; it is all in the data directory;
-5. `docker run` ([07 §6](07-ctl-script.md#host-script-docker)), on a docker network publishing `-p BIND:PORT:<container port>`, loopback unless the description or BIND widens it; a failure is `"docker run failed: <output>"`;
-6. after two seconds, **a container still running** is reported `"<NAME> is running — ./<app>-ctl status shows <Title>'s health once it is up"`; one that exited prints **its last words** (the last 30 log lines) and answers `"<NAME> did not stay up"`.
+4. **the app's own precondition,** `Ctl.AppCommands.before_start/1` when it defines one: an error stops `start` with its message, before anything of the container is touched;
+5. **the container recreated, always:** an existing one is removed (`rm -f`), so every changed setting takes effect. Nothing of value lives in the container; it is all in the data directory;
+6. `docker run` ([07 §6](07-ctl-script.md#host-script-docker)), on a docker network publishing `-p BIND:PORT:<container port>`, loopback unless the description or BIND widens it; a failure is `"docker run failed: <output>"`;
+7. after two seconds, **a container still running** is reported `"<NAME> is running — ./<app>-ctl status shows <Title>'s health once it is up"`; one that exited prints **its last words** (the last 30 log lines) and answers `"<NAME> did not stay up"`.
 
 ```test:cmd-start
 start makes exactly: info; image inspect <ref>; the chown container; container inspect sample; rm -f sample; the run argv of 07 §6; container inspect sample; and sleeps 2000 ms
+```
+
+```test:cmd-start-before
+an app whose before_start refuses: start answers its message, having made only info, image inspect and the chown check, no rm and no run; an app that allows it starts as before
 ```
 
 ```test:cmd-start-last-words

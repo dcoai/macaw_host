@@ -221,6 +221,22 @@ defmodule Macaw.Host.Ctl.CommandsTest do
              "untrusted_proxies:\n  - peer: 10.0.32.64, requests: 57\n  - peer: 10.0.0.9, requests: 21\n"
   end
 
+  @tag verifies: "cmd-start-before"
+  test "start asks the app's before_start, and its refusal touches no container",
+       %{script: script} do
+    Process.put(:sample_no_account, true)
+    on_exit(fn -> Process.delete(:sample_no_account) end)
+    Recorder.install([@daemon_up, @image_present, @owned, @running])
+
+    assert {{:error, "nobody could sign in: create an account first"}, _out} =
+             run(script, ["start"])
+
+    refute Enum.any?(
+             Recorder.docker_calls(),
+             &match?([c, f | _] when {c, f} in [{"rm", "-f"}, {"run", "-d"}], &1)
+           )
+  end
+
   @tag verifies: "cmd-status-layout"
   test "status pads each level to its widest key, and prints lists and nil as words",
        %{script: script} do

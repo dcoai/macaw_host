@@ -62,6 +62,17 @@ defmodule Ctl.AppCommands do
   @doc "The admin console's URL, from this host's ADMIN_PORT."
   def seeds(env), do: [admin_url: "http://localhost:#{Ctl.Env.get(env, "ADMIN_PORT")}"]
 
+  @doc """
+  The sample's precondition for start: refused while the test says the
+  console has no account (`Process.put(:sample_no_account, true)`), as an
+  app refuses to start where nobody could sign in.
+  """
+  def before_start(_env) do
+    if Process.get(:sample_no_account),
+      do: {:error, "nobody could sign in: create an account first"},
+      else: :ok
+  end
+
   @doc "The admin console's port, on status's host lines."
   def status_lines(env), do: ["admin:    port #{Ctl.Env.get(env, "ADMIN_PORT")}"]
 end

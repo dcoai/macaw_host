@@ -500,6 +500,7 @@ defmodule Ctl.Commands do
 
     with :ok <- require_home(env),
          :ok <- ensure_ready(env),
+         :ok <- before_start(env),
          :ok <- remove_existing(name),
          :ok <- run_container(env, name) do
       Ctl.World.sleep(2000)
@@ -733,6 +734,15 @@ defmodule Ctl.Commands do
           :that_address -> " (that address)"
         end
     end
+  end
+
+  # The app's own precondition (`Ctl.AppCommands.before_start/1`), once the
+  # image and the data are ready and before the container is touched, so a
+  # refusal leaves a running one as it was.
+  defp before_start(env) do
+    if function_exported?(Ctl.AppCommands, :before_start, 1),
+      do: apply(Ctl.AppCommands, :before_start, [env]),
+      else: :ok
   end
 
   # The app's own host lines (`Ctl.AppCommands.status_lines/1`): its other

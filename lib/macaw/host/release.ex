@@ -51,9 +51,9 @@ defmodule Macaw.Host.Release do
   end
 
   @doc """
-  `<app>-ctl config list | get NAME | set NAME VALUE | unset NAME`, over the
-  app's literal `config.exs` in its data directory (`:data_dir` in the
-  app's environment). Arguments from `<PREFIX>_CTL_ARGS`.
+  `<app>-ctl config list | get NAME | set NAME VALUE | unset NAME | reset`,
+  over the app's literal `config.exs` in its data directory (`:data_dir` in
+  the app's environment). Arguments from `<PREFIX>_CTL_ARGS`.
   """
   @spec config(atom(), [Config.spec()], String.t()) :: :ok
   def config(app, specs, prefix) do
@@ -69,7 +69,9 @@ defmodule Macaw.Host.Release do
   @doc """
   The config commands, pure apart from the file and `env` (the environment,
   `System.get_env/0` by default): `{:ok, objects}` or `{:error, message}`.
-  A file with faults is the error, every fault on one line.
+  A file with faults is the error, every fault on one line, for every
+  command but `reset`, which exists to repair it
+  (`Macaw.Host.Config.reset!/1`).
 
   `list` and `get` show each setting as the app would load it, through
   `Macaw.Host.Config.resolve_setting/4`, the path `Macaw.Host.Config.load!/3`
@@ -79,7 +81,15 @@ defmodule Macaw.Host.Release do
   """
   @spec config_command(Path.t(), [Config.spec()], String.t(), [String.t()], map()) ::
           {:ok, [map()]} | {:error, String.t()}
-  def config_command(path, specs, prefix, argv, env \\ System.get_env()) do
+  def config_command(path, specs, prefix, argv, env \\ System.get_env())
+
+  # Before the file is read: a file that no longer parses is what it repairs.
+  def config_command(path, _specs, _prefix, ["reset"], _env) do
+    with {:ok, set_aside} <- Config.reset!(path),
+         do: {:ok, [%{ok: true, reset: true, set_aside: set_aside, restart: "restart to apply"}]}
+  end
+
+  def config_command(path, specs, prefix, argv, env) do
     with {:ok, file} <- Config.read_file(path) do
       command(path, specs, prefix, argv, env, file)
     end
@@ -105,7 +115,7 @@ defmodule Macaw.Host.Release do
              do: {:ok, [%{ok: true, unset: name, restart: "restart to apply"}]}
 
       _ ->
-        {:error, "usage: config list | get NAME | set NAME VALUE | unset NAME"}
+        {:error, "usage: config list | get NAME | set NAME VALUE | unset NAME | reset"}
     end
   end
 

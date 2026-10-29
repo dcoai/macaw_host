@@ -25,7 +25,8 @@ defmodule Macaw.Host.Config do
 
   `put!/4` and `delete!/3` edit the file for the `<app>-ctl config` command:
   the value is parsed as a literal, checked against the setting's type, and
-  the file is written atomically; nothing is evaluated.
+  the file is written atomically; nothing is evaluated. `reset!/1` sets a file
+  that no longer parses aside and starts an empty one.
   """
 
   alias Macaw.Host.Config.{Literal, Types}
@@ -183,6 +184,61 @@ defmodule Macaw.Host.Config do
     with {:ok, {key, _}} <- lookup(specs, name),
          {:ok, file} <- read_file(path) do
       Literal.write!(path, drop_key(file, key), header())
+    end
+  end
+
+  @doc """
+  Repairs a file that no longer parses: sets it aside beside itself as
+  `<name>.broken` (mode 0600, its bytes intact) and writes an empty one.
+  `{:ok, set_aside}`, the name it was set aside as, or `{:error, why}` with
+  both files untouched: there is no file, it parses (nothing to repair), or
+  a `.broken` one is already there, which is never overwritten.
+  """
+  @spec reset!(Path.t()) :: {:ok, String.t()} | {:error, String.t()}
+  def reset!(path) do
+    name = Path.basename(path)
+    broken = path <> ".broken"
+
+    with {:ok, text} <- read_broken(path, name),
+         {:error, _faults} <- Literal.parse(text, path),
+         {:error, :enoent} <- File.lstat(broken),
+         :ok <- set_aside(path, broken) do
+      # Only once the broken file is safely beside it: a failed rename
+      # leaves it where it was, never lost.
+      Literal.write!(path, %{}, header())
+      {:ok, Path.basename(broken)}
+    else
+      {:ok, %File.Stat{}} ->
+        {:error, "#{name}.broken already exists: move it away first, then config reset again"}
+
+      {:ok, map} when is_map(map) ->
+        {:error, "#{name} parses: nothing to reset; config unset NAME removes a setting"}
+
+      {:error, reason} when is_atom(reason) ->
+        {:error, "cannot check for #{name}.broken: #{:file.format_error(reason)}"}
+
+      {:error, message} when is_binary(message) ->
+        {:error, message}
+    end
+  end
+
+  defp read_broken(path, name) do
+    case File.read(path) do
+      {:ok, text} -> {:ok, text}
+      {:error, :enoent} -> {:error, "there is no #{name}: nothing to reset"}
+      {:error, reason} -> {:error, "cannot read #{name}: #{:file.format_error(reason)}"}
+    end
+  end
+
+  # 0600 first: the broken file may hold a password, whatever mode a hand
+  # edit left it with.
+  defp set_aside(path, broken) do
+    with :ok <- File.chmod(path, 0o600),
+         :ok <- File.rename(path, broken) do
+      :ok
+    else
+      {:error, reason} ->
+        {:error, "cannot set #{Path.basename(path)} aside: #{:file.format_error(reason)}"}
     end
   end
 

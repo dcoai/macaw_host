@@ -254,6 +254,49 @@ defmodule Macaw.Host.ConfigTest do
       assert :ok = Config.delete!(path, @specs, "port")
       assert Literal.read!(path) == %{}
     end
+
+    @tag verifies: "config-reset"
+    test "reset! sets a broken file aside, intact, and starts an empty one; never twice",
+         %{tmp_dir: dir} do
+      path = Path.join(dir, "config.exs")
+      broken = path <> ".broken"
+      text = "%{\n  port: x,\n  smtp_password: \"hunter2xq\"\n}\n"
+      File.write!(path, text)
+      File.chmod!(path, 0o644)
+
+      assert {:ok, "config.exs.broken"} = Config.reset!(path)
+      assert File.read!(broken) == text
+      assert File.stat!(broken).mode |> Bitwise.band(0o777) == 0o600
+      assert File.stat!(path).mode |> Bitwise.band(0o777) == 0o600
+      assert Literal.read!(path) == %{}
+      assert File.read!(path) =~ "# App configuration: a literal map"
+      assert {:ok, 8443} = Config.put!(path, @specs, "port", "8443")
+
+      # Broken again, with the first one still set aside: refused, both untouched.
+      File.write!(path, "%{port: y}")
+
+      assert {:error, "config.exs.broken already exists: move it away first" <> _} =
+               Config.reset!(path)
+
+      assert File.read!(path) == "%{port: y}"
+      assert File.read!(broken) == text
+    end
+
+    @tag verifies: "config-reset"
+    test "reset! refuses a file that parses, and no file", %{tmp_dir: dir} do
+      path = Path.join(dir, "config.exs")
+
+      assert {:error, "there is no config.exs: nothing to reset"} = Config.reset!(path)
+      refute File.exists?(path)
+
+      File.write!(path, "%{port: 8443}")
+
+      assert {:error, "config.exs parses: nothing to reset; config unset NAME removes a setting"} =
+               Config.reset!(path)
+
+      assert File.read!(path) == "%{port: 8443}"
+      refute File.exists?(path <> ".broken")
+    end
   end
 
   # Each section's own text, beside the hints inside it.

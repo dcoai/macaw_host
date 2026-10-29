@@ -166,11 +166,15 @@ Macaw.Host.Config.mask(:secret, v) equals the generated script's Ctl.Secret.mask
 
 ## 6. Editing for the ctl {#host-config-edit}
 
-`<app>-ctl config set` and `unset` change the file through the app ([03 §3](03-release.md#host-release-config)), with these:
+`<app>-ctl config set`, `unset` and `reset` change the file through the app ([03 §3](03-release.md#host-release-config)), with these:
 - `Macaw.Host.Config.put!/4` sets a setting, by name as typed, to a value as typed. The name is **matched as a string** against the declared names, so nothing typed becomes an atom (`"no setting named prot"`). The value is parsed as a literal (`parse_value/2`; nothing is evaluated) and checked against the setting's type. **An enum value is matched by name,** `open` or `:open`, so a typo answers `"must be one of open, closed"` instead of an atom fault. **A value that isn't a literal** is `"value:1: not a literal: <text>"`, whether or not the word is an atom the VM knows, and, **when the setting's type takes the text as a string** (asked of the type, `Types.check/2`, never a list of string-like types), the answer goes on `"; a string is quoted: config set <name> '"<text>"'"`, a secret's text never repeated, in the fault or the hint (`…`). The `@FILE` form reads the same way. It returns `{:ok, value}`, the checked value, after writing the file (§1.4, with a header saying the file is a literal map edited with `<app>-ctl config set` and that an env var still wins), or `{:error, why}` with **the file untouched.**
   - **What is stored is the literal as typed,** never the check's result (macaw_host#1). A check may normalize, resolving `{:env, "VAR"}` to the secret it names or an address to a tuple; storing that would write the secret into the file in clear text, or a value the file can't hold. An enum is stored as its atom.
 - `Macaw.Host.Config.delete!/3` removes a setting from the file, so it falls back to its env var or default: `:ok`, or `{:error, "no setting named …"}`.
 - Both read the file with `Macaw.Host.Config.read_file/1`: `{:ok, map}`, or a file with faults as `{:error, message}`, every fault on one line joined by `; `, with the file untouched. Both replace the key whether the file wrote it as an atom or a string.
+- `Macaw.Host.Config.reset!/1` **repairs a file that no longer parses,** which blocks the app's boot, `put!/4` and `delete!/3` alike (macaw#92): it sets the file aside beside itself as `config.exs.broken`, made 0600 first (it may hold a password) and renamed with its bytes intact, then writes an empty map (§1.4, with the same header). **The empty file is written only once the rename has succeeded,** so a failed rename (`{:error, "cannot set config.exs aside: <reason>"}`) leaves the broken file where it was, never lost. It returns `{:ok, "config.exs.broken"}`, or `{:error, why}` with **both files untouched:**
+  - no file: `"there is no config.exs: nothing to reset"`;
+  - a file that parses, which there is nothing to repair in: `"config.exs parses: nothing to reset; config unset NAME removes a setting"`;
+  - **a `config.exs.broken` already there,** set aside before and not yet looked at: `"config.exs.broken already exists: move it away first, then config reset again"`. It is never overwritten, and the name never carries a clock: one file set aside at a time, which an operator moves away on purpose.
 
 ```test:config-put-bare-word
 put!/4 of a bare word for a string setting answers "not a literal" and "a string is quoted: config set public_host '\"nas\"'", for an integer setting no quoting, a word that is no atom the same "not a literal" wording, a secret's text nowhere in the answer, and the file is untouched
@@ -186,4 +190,8 @@ put!/4 of auth as %{host: "nas", password: {:env, VAR}} answers the resolved blo
 
 ```test:config-delete
 after put!/4 of port, delete!/3 of "port" leaves the file reading %{}
+```
+
+```test:config-reset
+reset!/1 of a broken file (mode 0644, holding a password) answers {:ok, "config.exs.broken"}: config.exs.broken holds its bytes, both files are 0600, config.exs reads %{} under the header, and put!/4 works again; broken again, a second reset! is refused with "config.exs.broken already exists: move it away first" and both files are as they were; no file, and a file that parses, are refused and left as they were, no .broken made
 ```

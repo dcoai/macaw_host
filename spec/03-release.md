@@ -59,7 +59,7 @@ in a fresh VM, migrate of an app with no :ecto_repos exits non-zero with output 
 
 `Macaw.Host.Release.config/3` is `<app>-ctl config`, over the app's literal `config.exs` at `<data_dir>/config.exs` (`:data_dir` from the app's environment, after loading the app). It reads the arguments with `ctl_args!/1`, runs them with `config_command/4`, then emits each answer object or fails with the message.
 
-`Macaw.Host.Release.config_command/5` is the commands, pure apart from the file and its fifth argument, the environment (`System.get_env/0` by default): `{:ok, objects}` or `{:error, message}`. It reads the file with `Macaw.Host.Config.read_file/1`: a missing file is empty, and **a file with faults is the error, every fault on one line,** so `config/3` answers it as the protocol says, one stderr line and exit status 1, never a stack trace (macaw_compose#70).
+`Macaw.Host.Release.config_command/5` is the commands, pure apart from the file and its fifth argument, the environment (`System.get_env/0` by default): `{:ok, objects}` or `{:error, message}`. It reads the file with `Macaw.Host.Config.read_file/1`: a missing file is empty, and **a file with faults is the error, every fault on one line,** so `config/3` answers it as the protocol says, one stderr line and exit status 1, never a stack trace (macaw_compose#70). **`reset` alone doesn't read it first:** a file that no longer parses is what it exists to repair.
 
 | Arguments | Answer |
 |---|---|
@@ -67,7 +67,8 @@ in a fresh VM, migrate of an app with no :ecto_repos exits non-zero with output 
 | `["get", NAME]` | that setting's `{name, value, source}`, or `"no setting named NAME"` |
 | `["set", NAME, VALUE]` | `Macaw.Host.Config.put!/4` ([01 §6](01-config.md#host-config-edit)), then `{"ok": true, "set": NAME, "restart": "restart to apply"}`, or its error |
 | `["unset", NAME]` | `Macaw.Host.Config.delete!/3`, then `{"ok": true, "unset": NAME, "restart": "restart to apply"}`, or its error |
-| anything else | `"usage: config list \| get NAME \| set NAME VALUE \| unset NAME"` |
+| `["reset"]` | `Macaw.Host.Config.reset!/1` ([01 §6](01-config.md#host-config-edit)): a file that no longer parses set aside as `config.exs.broken` and an empty one written, then `{"ok": true, "reset": true, "set_aside": "config.exs.broken", "restart": "restart to apply"}`, or its error (no file, a file that parses, a `config.exs.broken` already there) |
+| anything else | `"usage: config list \| get NAME \| set NAME VALUE \| unset NAME \| reset"` |
 
 - **`list` and `get` show each setting as the app would load it,** through `Macaw.Host.Config.resolve_setting/4`, the path `Macaw.Host.Config.load!/3` takes ([01 §3](01-config.md#host-config-resolve)): an env var cast by its type, a file key written as an atom or a string, else the default.
 - **A setting's `source`** is `"env <VAR>"` when its env var is set (even empty), else `"config.exs"` when the file has it, else `"default"`.
@@ -98,6 +99,14 @@ with RT_PORT " 8080 " and RT_MODE "ajar": list shows port "8080" from "env RT_PO
 
 ```test:release-config-broken
 in a fresh VM, list, get and set over a config.exs with faults on lines 2 and 3 each print exactly one line naming both faults, no exception, and exit with status 1
+```
+
+```test:release-config-reset
+reset with no file, then over a file that parses, is refused; over a file that list refuses for its fault it answers exactly %{"ok" => true, "reset" => true, "set_aside" => "config.exs.broken", "restart" => "restart to apply"} (through JSON), the broken bytes are in config.exs.broken, and set port "8443" works again; broken again, reset is refused with "config.exs.broken already exists" and both files are as they were
+```
+
+```test:release-config-reset-eval
+in a fresh VM, reset over a config.exs with faults prints that one JSON line and exits 0, then set port "8443" answers "set":"port"; broken again, reset exits 1 with "config.exs.broken already exists: move it away first" and config.exs untouched
 ```
 
 ```test:release-config-errors

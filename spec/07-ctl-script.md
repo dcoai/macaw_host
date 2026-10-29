@@ -214,7 +214,7 @@ config set tz "Europe/Oslo": the eval argv is run --rm --user 2060:2060 -v <data
 - `Ctl.script_path/0` is where the script was loaded from, expanded, so `init` and `update` can rewrite it.
 
 ```test:script-help
-run as a program, help exits 0 without a warning and lists "./sample-ctl config list | get KEY | set KEY VALUE|@FILE | unset KEY", "Sample's own commands:", "./sample-ctl reset-password USER" and "ADMIN_PORT        4001"
+run as a program, help exits 0 without a warning and lists "./sample-ctl config list | get KEY | set KEY VALUE|@FILE | unset KEY | reset", "Sample's own commands:", "./sample-ctl reset-password USER" and "ADMIN_PORT        4001"
 ```
 
 ```test:script-unknown

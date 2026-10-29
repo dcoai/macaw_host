@@ -113,6 +113,42 @@ defmodule Macaw.Host.ReleaseTest do
 
       assert {:error, "usage:" <> _} = Release.config_command(path, @specs, "RT", ["frob"])
     end
+
+    @tag verifies: "release-config-reset"
+    test "reset repairs a file that no longer parses, and refuses anything else", %{tmp_dir: dir} do
+      path = Path.join(dir, "config.exs")
+
+      assert {:error, "there is no config.exs: nothing to reset"} =
+               Release.config_command(path, @specs, "RT", ["reset"])
+
+      File.write!(path, "%{port: 8443}")
+
+      assert {:error, "config.exs parses: " <> _} =
+               Release.config_command(path, @specs, "RT", ["reset"])
+
+      File.write!(path, "%{\n  port: x\n}")
+      assert {:error, _} = Release.config_command(path, @specs, "RT", ["list"])
+
+      assert {:ok, [answer]} = Release.config_command(path, @specs, "RT", ["reset"])
+
+      assert answer |> JSON.encode!() |> JSON.decode!() == %{
+               "ok" => true,
+               "reset" => true,
+               "set_aside" => "config.exs.broken",
+               "restart" => "restart to apply"
+             }
+
+      assert File.read!(path <> ".broken") == "%{\n  port: x\n}"
+      assert {:ok, [_]} = Release.config_command(path, @specs, "RT", ["set", "port", "8443"])
+
+      File.write!(path, "%{port: y}")
+
+      assert {:error, "config.exs.broken already exists" <> _} =
+               Release.config_command(path, @specs, "RT", ["reset"])
+
+      assert File.read!(path) == "%{port: y}"
+      assert File.read!(path <> ".broken") == "%{\n  port: x\n}"
+    end
   end
 
   @tag verifies: "release-status"
@@ -176,6 +212,38 @@ defmodule Macaw.Host.ReleaseTest do
         assert line =~ "config.exs:3: not a literal: @doc"
         refute line =~ "ArgumentError"
       end
+    end
+
+    @tag verifies: "release-config-reset-eval"
+    test "reset answers one JSON line over a broken config.exs, and set works again",
+         %{tmp_dir: dir} do
+      broken = "%{\n  port: x,\n  mode: @doc\n}\n"
+      File.write!(Path.join(dir, "config.exs"), broken)
+
+      code = """
+      Application.put_env(:rt_app, :data_dir, #{inspect(dir)})
+      Macaw.Host.Release.config(:rt_app, [{:port, :port, 4000}], "RT")
+      """
+
+      assert {out, 0} = eval(code, [{"RT_CTL_ARGS", ~s(["reset"])}])
+      assert [line] = String.split(out, "\n", trim: true)
+
+      assert JSON.decode!(line) == %{
+               "ok" => true,
+               "reset" => true,
+               "set_aside" => "config.exs.broken",
+               "restart" => "restart to apply"
+             }
+
+      assert File.read!(Path.join(dir, "config.exs.broken")) == broken
+
+      assert {out, 0} = eval(code, [{"RT_CTL_ARGS", ~s(["set", "port", "8443"])}])
+      assert out =~ ~s("set":"port")
+
+      File.write!(Path.join(dir, "config.exs"), broken)
+      assert {out, 1} = eval(code, [{"RT_CTL_ARGS", ~s(["reset"])}])
+      assert out =~ "config.exs.broken already exists: move it away first"
+      assert File.read!(Path.join(dir, "config.exs")) == broken
     end
 
     @tag verifies: "release-migrate-no-repos"
@@ -285,7 +353,7 @@ defmodule Macaw.Host.ReleaseTest do
       assert {:ok, [%{ok: true, unset: "tz", restart: "restart to apply"}]} =
                Release.config_command(path, specs, "RT", ["unset", "tz"], %{})
 
-      assert {:error, "usage: config list | get NAME | set NAME VALUE | unset NAME"} =
+      assert {:error, "usage: config list | get NAME | set NAME VALUE | unset NAME | reset"} =
                Release.config_command(path, specs, "RT", ["get"], %{})
 
       File.write!(path, "%{\n  port: x\n}")

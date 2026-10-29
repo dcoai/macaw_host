@@ -446,7 +446,7 @@ defmodule Ctl.Commands do
     end
   end
 
-  @config_usage "usage: ./#{@script} config list | get KEY | set KEY VALUE | set KEY @FILE | unset KEY"
+  @config_usage "usage: ./#{@script} config list | get KEY | set KEY VALUE | set KEY @FILE | unset KEY | reset"
 
   @doc """
   The app's own configuration, kept on the data volume (`config.exs`) and
@@ -460,6 +460,9 @@ defmodule Ctl.Commands do
   long to type or holding a secret: the text travels like any other value,
   in the environment, never on a command line `ps` or a shell's history
   would keep.
+
+  `reset` repairs a `config.exs` that no longer parses: the app sets it
+  aside as `config.exs.broken` and starts an empty one.
   """
   def config(env, args) do
     with :ok <- require_home(env) do
@@ -469,6 +472,7 @@ defmodule Ctl.Commands do
         ["set", key, "@" <> file] -> config_from_file(env, key, file)
         ["set", _key, _value] -> config_call(env, args)
         ["unset", _key] -> config_call(env, args)
+        ["reset"] -> config_call(env, args)
         _ -> {:error, @config_usage}
       end
     end
@@ -488,7 +492,7 @@ defmodule Ctl.Commands do
     with :ok <- ensure_ready(env),
          {:ok, objects} <- release_config(env, args),
          :ok <- print_config(hd(args), objects) do
-      if hd(args) in ["set", "unset"],
+      if hd(args) in ["set", "unset", "reset"],
         do: IO.puts("#{@title}'s configuration updated — ./#{@script} restart to apply"),
         else: :ok
     end
@@ -523,6 +527,9 @@ defmodule Ctl.Commands do
 
       %{"unset" => name} ->
         IO.puts("unset #{name}")
+
+      %{"reset" => true, "set_aside" => set_aside} ->
+        IO.puts("config.exs set aside as #{set_aside}; an empty one written")
 
       other ->
         IO.puts(JSON.encode!(other))

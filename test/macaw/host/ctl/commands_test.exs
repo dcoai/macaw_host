@@ -437,6 +437,32 @@ defmodule Macaw.Host.Ctl.CommandsTest do
 
       assert {{:halt, 1}, _} = run(script, ["config", "get", "nope"])
     end
+
+    @tag verifies: "cmd-config-reset"
+    test "config reset passes reset by name, as unset does, and says what it set aside",
+         %{script: script} do
+      answer =
+        ~s({"ok":true,"reset":true,"restart":"restart to apply","set_aside":"config.exs.broken"}\n)
+
+      Recorder.install([
+        @daemon_up,
+        @image_present,
+        @owned,
+        {["docker", "run", "--rm", "--user", "2060:2060"], {answer, 0}}
+      ])
+
+      assert {:ok, out} = run(script, ["config", "reset"])
+      assert out =~ "config.exs set aside as config.exs.broken; an empty one written\n"
+      assert out =~ "Sample's configuration updated — ./sample-ctl restart to apply"
+
+      assert [{argv, [env: [{"SAMPLE_CTL_ARGS", ~s(["reset"])}]]}] = eval_calls()
+      refute "reset" in argv
+
+      assert {{:error, "usage: ./sample-ctl config" <> usage}, _} =
+               run(script, ["config", "reset", "now"])
+
+      assert usage =~ "| unset KEY | reset"
+    end
   end
 
   @tag verifies: "cmd-logs"
@@ -1150,7 +1176,7 @@ defmodule Macaw.Host.Ctl.CommandsTest do
       refute Enum.any?(argv, &(&1 =~ "unset"))
 
       assert {{:error,
-               "usage: ./sample-ctl config list | get KEY | set KEY VALUE | set KEY @FILE | unset KEY"},
+               "usage: ./sample-ctl config list | get KEY | set KEY VALUE | set KEY @FILE | unset KEY | reset"},
               _} =
                run(script, ["config", "list", "--reveal"])
 
